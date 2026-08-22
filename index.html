@@ -139,6 +139,8 @@ function makeTrack(kind){
       <label class="file">Subir pista<input type="file" accept="audio/*"></label>
       <select class="tuning">${Object.entries(d.tunings).map(([k,v])=>`<option value="${k}">${v.n}</option>`).join("")}</select>
       <label class="lbl">Sensibilidad <input type="range" class="sens" min="20" max="80" value="50"></label>
+      <label class="lbl">Filtro ruido <input type="range" class="noise" min="0" max="60" value="20"></label>
+      <label class="lbl" title="Elimina octavas dobles y notas muy cortas típicas de la distorsión"><input type="checkbox" class="clean" checked> Limpieza</label>
       <label class="lbl">Rango <input type="number" class="t0" value="0" min="0" style="width:62px"> – <input type="number" class="t1" placeholder="fin" min="1" style="width:62px"> s</label>
       <button class="retrans" disabled>Re-transcribir</button>
       <button class="toggle mute">Silencio</button>
@@ -156,10 +158,12 @@ function makeTrack(kind){
   $(".file input",el).onchange=e=>loadFile(T,e.target.files[0]);
   $(".tuning",el).onchange=()=>{if(T.rawNotes.length)buildSteps(T);drawTab(T);drawFret(T);};
   $(".retrans",el).onclick=()=>transcribe(T);
+  [$(".noise",el),$(".clean",el)].forEach(c=>c.oninput=c.onchange=()=>{ if(!T.notesRaw)return; T.rawNotes=cleanNotes(T.notesRaw,T); buildSteps(T); drawTab(T); drawFret(T);
+    $(".msg",el).textContent=`${T.rawNotes.length} notas tras el filtro.`; });
   $(".mute",el).onclick=e=>{T.muted=!T.muted;e.target.classList.toggle("on",T.muted);el.classList.toggle("muted",T.muted);applyMix();};
   $(".solo",el).onclick=e=>{T.solo=!T.solo;e.target.classList.toggle("on",T.solo);applyMix();};
   $(".vol",el).oninput=applyMix;
-  $(".tab canvas",el).onclick=e=>{ if(!T.steps.length)return; const r=e.target.getBoundingClientRect(); const x=(e.clientX-r.left)*(e.target.width/r.width);
+  $(".tab canvas",el).onclick=e=>{ if(!T.steps.length)return; const r=e.target.getBoundingClientRect(); const x=(e.clientX-r.left)*(e.target.width/r.width); if((e.clientY-r.top)*(e.target.height/r.height)<22)return;
     const i=Math.floor((x-40)/COLW)+T.view; if(i>=0&&i<T.steps.length){T.cursor=i;seekAll(i*stepSec());} };
   drawFret(T);
   return T;
@@ -201,8 +205,10 @@ async function transcribe(T){
   const sens=$(".sens",T.el).value/100; // más sensibilidad = umbrales más bajos
   const onsetT=0.8-sens*0.6, frameT=0.55-sens*0.4;
   const notes=noteFramesToTime(addPitchBendsToNoteEvents(contours,outputToNotesPoly(frames,onsets,onsetT,frameT,T.kind==="bass"?6:4,true,T.d.maxFreq,T.d.minFreq,true,11)));
-  const fresh=notes.map(n=>({m:n.pitchMidi,t:n.startTimeSeconds+a0,d:n.durationSeconds,a:n.amplitude}));
+  let fresh=notes.map(n=>({m:n.pitchMidi,t:n.startTimeSeconds+a0,d:n.durationSeconds,a:n.amplitude}));
+  fresh=cleanNotes(fresh,T);
   T.rawNotes=[...T.rawNotes.filter(n=>n.t<a0||n.t>=a1),...fresh]; // conserva lo ya transcrito fuera del rango
+  T.notesRaw=notes.map(n=>({m:n.pitchMidi,t:n.startTimeSeconds+a0,d:n.durationSeconds,a:n.amplitude}));
   prog.hidden=true;
   if(!$("#bpm").dataset.user) estimateBpm(T);
   buildSteps(T); T.cursor=0; drawTab(T); drawFret(T);
@@ -210,6 +216,28 @@ async function transcribe(T){
   enableTransport();
 }
 
+
+function cleanNotes(ns,T){
+  const tun=T.tuning(), lo=Math.min(...tun), hi=Math.max(...tun)+T.d.frets;
+  const noise=$(".noise",T.el).value/100, clean=$(".clean",T.el).checked, ss=stepSec();
+  ns=ns.filter(n=>n.m>=lo&&n.m<=hi);                       // fuera del rango del instrumento
+  const maxA=Math.max(0.01,...ns.map(n=>n.a));
+  ns=ns.filter(n=>n.a>=maxA*noise);                         // muy débiles respecto al máximo
+  if(!clean)return ns;
+  ns.sort((a,b)=>a.t-b.t);
+  const out=[];
+  ns.forEach(n=>{
+    if(n.d<ss*0.35&&n.a<maxA*0.5)return;                    // notas muy cortas y flojas
+    // octava/quinta fantasma: misma posición, 12 o 19 semitonos arriba, más débil
+    const ghost=ns.some(o=>o!==n&&Math.abs(o.t-n.t)<ss*0.5&&(n.m-o.m===12||n.m-o.m===19||n.m-o.m===24)&&n.a<o.a*0.85);
+    if(ghost)return;
+    // re-disparo de la misma nota casi inmediato → fusionar
+    const prev=out.find(o=>o.m===n.m&&n.t-(o.t+o.d)<ss*0.25&&n.t>=o.t);
+    if(prev&&n.t-prev.t<ss*0.6){prev.d=Math.max(prev.d,n.t+n.d-prev.t);return;}
+    out.push({...n});
+  });
+  return out;
+}
 function estimateBpm(T){ // mediana de intervalos entre ataques → candidato entre 70 y 180
   const ts=[...new Set(T.rawNotes.map(n=>Math.round(n.t*100)/100))].sort((a,b)=>a-b);
   const d=[]; for(let i=1;i<ts.length;i++){const x=ts[i]-ts[i-1]; if(x>0.08&&x<2)d.push(x);}
@@ -244,17 +272,50 @@ function buildSteps(T){
   $(".count",T.el).textContent=`${steps.filter(s=>s.length).length} pasos con notas · ${steps.length} pasos totales`;
 }
 
+// ===== Acordes =====
+const CHORDS=[["",[0,4,7]],["m",[0,3,7]],["5",[0,7]],["7",[0,4,7,10]],["m7",[0,3,7,10]],["maj7",[0,4,7,11]],["sus2",[0,2,7]],["sus4",[0,5,7]],["dim",[0,3,6]],["aug",[0,4,8]],["add9",[0,2,4,7]],["m6",[0,3,7,9]],["6",[0,4,7,9]]];
+function chordName(pcw,bassPc){ // pcw: peso por clase de altura (12)
+  const present=pcw.map((w,i)=>w>0?i:-1).filter(i=>i>=0); if(!present.length)return "";
+  if(present.length===1)return NOTE_NAMES[present[0]];
+  let best=null;
+  for(let root=0;root<12;root++) for(const [suf,iv] of CHORDS){
+    const set=iv.map(x=>(root+x)%12); let score=0;
+    set.forEach(pc=>score+=pcw[pc]>0?pcw[pc]:-0.6);               // nota del acorde presente / faltante
+    present.forEach(pc=>{if(!set.includes(pc))score-=pcw[pc]*0.7}); // notas sobrantes
+    if(bassPc===root)score+=0.8; if(pcw[root]===0)score-=1;
+    score-=iv.length*0.05;
+    if(!best||score>best.score)best={score,name:NOTE_NAMES[root]+suf,root};
+  }
+  if(best.score<0.8)return "";
+  return best.name+(bassPc!==null&&bassPc!==best.root&&pcw[bassPc]>0?"/"+NOTE_NAMES[bassPc]:"");
+}
+function chordsFor(T){ // un acorde por medio compás
+  const tun=T.tuning(), per=grid()*2, out=[]; const B=tracks.bass;
+  for(let i=0;i<T.steps.length;i+=per){
+    const pcw=new Array(12).fill(0); let bassM=null;
+    for(let k=i;k<i+per&&k<T.steps.length;k++){ T.steps[k].forEach(({s,f})=>{const m=tun[s]+f; pcw[m%12]+=1; if(bassM===null||m<bassM)bassM=m;});
+      if(B&&B!==T&&B.steps[k])B.steps[k].forEach(({s,f})=>{const m=B.tuning()[s]+f; pcw[m%12]+=0.8; if(bassM===null||m<bassM)bassM=m;}); }
+    out.push(chordName(pcw,bassM===null?null:bassM%12));
+  }
+  return out;
+}
 // ===== Tab (canvas) =====
 const COLW=30, ROWH=22;
 function drawTab(T){
   const cv=$(".tab canvas",T.el), empty=$(".tab .empty",T.el);
   const n=T.tuning().length;
-  const W=1180, H=n*ROWH+40; cv.width=W; cv.height=H;
+  const TOP=22; const W=1180, H=n*ROWH+40+TOP; cv.width=W; cv.height=H;
   const g=cv.getContext("2d"); g.clearRect(0,0,W,H);
   if(!T.steps.length){empty.hidden=false;cv.classList.add("blank");return;} empty.hidden=true;cv.classList.remove("blank");
   const cols=Math.floor((W-40)/COLW);
   if(T.cursor<T.view||T.cursor>=T.view+cols-2)T.view=Math.max(0,T.cursor-Math.floor(cols/3));
-  const tun=T.tuning(), perBar=grid()*4;
+  const tun=T.tuning(), perBar=grid()*4, half=grid()*2, chords=chordsFor(T);
+  g.save(); g.translate(0,TOP);
+  // acordes
+  let lastCh=null;
+  for(let c=0;c<cols;c++){ const i=T.view+c; if(i>=T.steps.length)break; if(i%half)continue; const ch=chords[i/half]; const x=40+c*COLW;
+    if(ch&&ch!==lastCh){g.font="700 13px Syne";g.fillStyle=T.d.color;g.textAlign="left";g.textBaseline="middle";g.fillText(ch,x+2,-11);} if(ch)lastCh=ch; else lastCh=null; }
+  g.textAlign="center";
   // nombres de cuerdas
   g.font="12px 'DM Mono'"; g.fillStyle="#8a8275"; g.textAlign="center"; g.textBaseline="middle";
   for(let r=0;r<n;r++){const y=20+r*ROWH; g.fillText(nn(tun[n-1-r]),16,y);}
@@ -269,6 +330,7 @@ function drawTab(T){
       const w=g.measureText(txt).width+6; g.fillStyle="#f3eee3"; g.fillRect(x-w/2,y-9,w,18);
       g.fillStyle=i===T.cursor?T.d.color:"#1a1712"; g.fillText(txt,x,y); });
   }
+  g.restore();
 }
 
 // ===== Mástil (SVG) =====
@@ -339,6 +401,7 @@ $("#exportTxt").onclick=()=>{
   Object.values(tracks).forEach(T=>{ if(!T.steps.length)return; const tun=T.tuning(),n=tun.length,perBar=grid()*4,perLine=perBar*4;
     out+=`[${T.d.label} · ${$(".tuning",T.el).selectedOptions[0].text}]\n`;
     for(let start=0;start<T.steps.length;start+=perLine){
+      const chords=chordsFor(T), half=grid()*2; let chLine="   "; for(let i=start;i<Math.min(start+perLine,T.steps.length);i++){ chLine+=(i%half===0?(chords[i/half]||""):"").padEnd(3); if((i+1)%perBar===0)chLine+=" "; } out+=chLine+"\n";
       const lines=Array.from({length:n},(_,r)=>nn(tun[n-1-r]).padEnd(2)+"|");
       for(let i=start;i<Math.min(start+perLine,T.steps.length);i++){
         for(let r=0;r<n;r++){const s=n-1-r; const h=T.steps[i].find(x=>x.s===s); lines[r]+=(h?String(h.f):"-").padEnd(3,"-");}

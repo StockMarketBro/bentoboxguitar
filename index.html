@@ -152,7 +152,7 @@ function makeTrack(kind){
       <button class="rec">● Grabar</button>
       <span class="meter" hidden><i></i></span>
       <select class="style" title="Cómo convertir las notas detectadas en tab">
-        <option value="power">Estilo: power chords</option><option value="root">Estilo: solo raíz</option><option value="notes">Estilo: notas (IA)</option>
+        <option value="power">Estilo: power chords</option><option value="lead">Estilo: riff / solo (una nota)</option><option value="root">Estilo: solo raíz (bajo)</option><option value="notes">Estilo: notas (IA)</option>
       </select>
       <select class="tuning">${Object.entries(d.tunings).map(([k,v])=>`<option value="${k}">${v.n}</option>`).join("")}</select>
       <label class="lbl">Sensibilidad <input type="range" class="sens" min="20" max="80" value="50"></label>
@@ -173,7 +173,7 @@ function makeTrack(kind){
     tuning:()=>d.tunings[$(".tuning",el).value].m};
   tracks[kind]=T;
   $(".file input",el).onchange=e=>loadFile(T,e.target.files[0]);
-  $(".style",el).onchange=()=>{ if(T.buffer){ if($(".style",el).value!=="notes"||!T.notesRaw){T.rawNotes=[];transcribe(T);return;} T.rawNotes=cleanNotes(T.notesRaw,T);} if(T.rawNotes.length)buildSteps(T);drawTab(T);drawFret(T);};
+  $(".style",el).onchange=()=>{ if($(".style",el).value==="lead"&&grid()<4&&!$("#grid").dataset.user){$("#grid").value=4;} if(T.buffer){ if($(".style",el).value!=="notes"||!T.notesRaw){T.rawNotes=[];transcribe(T);return;} T.rawNotes=cleanNotes(T.notesRaw,T);} if(T.rawNotes.length)buildSteps(T);drawTab(T);drawFret(T);};
   if(kind==="bass")$(".style",el).value="root";
   $(".tuning",el).onchange=()=>{ if($(".style",el).value!=="notes"&&T.buffer){T.rawNotes=[];transcribe(T);return;} if(T.rawNotes.length)buildSteps(T);drawTab(T);drawFret(T);};
   $(".rec",el).onclick=()=>T.rec?stopRec(T):startRec(T);
@@ -240,9 +240,9 @@ async function transcribe(T){
     const a0=Math.max(0,+$(".t0",T.el).value||0), a1=Math.min(T.buffer.duration,+$(".t1",T.el).value||T.buffer.duration);
     msg.textContent="Detectando raíces…"; await new Promise(r=>setTimeout(r,30));
     if(!$("#bpm").dataset.user){ const b=bpmFromAudio(T); if(b)$("#bpm").value=b; }
-    const fresh=rootsFromAudio(T,a0,a1); T.notesRaw=null;
+    const fresh=$(".style",T.el).value==="lead"?leadFromAudio(T,a0,a1):rootsFromAudio(T,a0,a1); T.notesRaw=null;
     T.rawNotes=[...T.rawNotes.filter(n=>n.t<a0||n.t>=a1),...fresh]; buildSteps(T); T.cursor=0; drawTab(T); drawFret(T);
-    msg.textContent=`${fresh.length} raíces detectadas en ${Math.round(a0)}–${Math.round(a1)} s · BPM ${bpm()}. Si la tab va desfasada, ajusta el BPM.`; enableTransport(); return; }
+    msg.textContent=`${fresh.length} ${$(".style",T.el).value==="lead"?"notas":"raíces"} detectadas en ${Math.round(a0)}–${Math.round(a1)} s · BPM ${bpm()}. Si la tab va desfasada, ajusta el BPM.`; enableTransport(); return; }
   if(!model){msg.textContent="El modelo aún se está cargando…";return;}
   prog.hidden=false; bar.style.width="0"; msg.textContent="Preparando audio (22.05 kHz mono)…";
   // remuestrear a 22050 mono
@@ -305,11 +305,29 @@ function fft(re,im){ const n=re.length; for(let i=1,j=0;i<n;i++){let bit=n>>1;fo
   for(let len=2;len<=n;len<<=1){const ang=-2*Math.PI/len,wr=Math.cos(ang),wi=Math.sin(ang);
     for(let i=0;i<n;i+=len){let cr=1,ci=0;for(let j=0;j<len/2;j++){const a=i+j,b=a+len/2;const tr=re[b]*cr-im[b]*ci,ti=re[b]*ci+im[b]*cr;re[b]=re[a]-tr;im[b]=im[a]-ti;re[a]+=tr;im[a]+=ti;const nr=cr*wr-ci*wi;ci=cr*wi+ci*wr;cr=nr;}}}}
 const FN=4096, HANN=Float32Array.from({length:FN},(_,i)=>0.5-0.5*Math.cos(2*Math.PI*i/FN));
-function spectrumAt(mono,center){ const re=new Float32Array(FN),im=new Float32Array(FN); const s=Math.max(0,Math.floor(center-FN/2));
-  for(let i=0;i<FN;i++)re[i]=(mono[s+i]||0)*HANN[i]; fft(re,im); const mag=new Float32Array(FN/2); for(let i=0;i<FN/2;i++)mag[i]=Math.hypot(re[i],im[i]); return mag; }
+function spectrumAt(mono,center,n=FN){ const re=new Float32Array(FN),im=new Float32Array(FN); const s=Math.max(0,Math.floor(center-n/2));
+  for(let i=0;i<n;i++)re[i]=(mono[s+i]||0)*(0.5-0.5*Math.cos(2*Math.PI*i/n)); fft(re,im); const mag=new Float32Array(FN/2); for(let i=0;i<FN/2;i++)mag[i]=Math.hypot(re[i],im[i]); return mag; }
 function peak(mag,hz){ const sr=22050, lo=Math.floor(hz*0.985*FN/sr), hi=Math.ceil(hz*1.015*FN/sr); let m=0; for(let i=Math.max(1,lo);i<=Math.min(FN/2-1,hi);i++)if(mag[i]>m)m=mag[i]; return m; }
 function salience(mag,m){ const f0=440*Math.pow(2,(m-69)/12), L=x=>Math.log1p(x);
   return L(peak(mag,f0))+0.8*L(peak(mag,f0*1.5))+0.6*L(peak(mag,2*f0))+0.5*L(peak(mag,3*f0))+0.3*L(peak(mag,4*f0))-0.6*L(peak(mag,f0/2))-Math.max(0,m-57)*0.25; }
+function salienceLead(mag,m){ const f0=440*Math.pow(2,(m-69)/12), L=x=>Math.log1p(x);
+  return 1.2*L(peak(mag,f0))+0.5*L(peak(mag,2*f0))+0.3*L(peak(mag,3*f0))+0.15*L(peak(mag,4*f0))-0.8*L(peak(mag,f0/2))-0.3*L(peak(mag,f0*2/3)); }
+function leadFromAudio(T,a0,a1){ // una nota por ataque, rango completo del instrumento
+  const mono=T.mono, ss=stepSec(), tun=T.tuning(), lo=tun[0], hi=tun[tun.length-1]+T.d.frets;
+  const WN=Math.max(1024,Math.min(FN,Math.round(ss*22050*0.9)));
+  const i0=Math.floor(a0/ss), i1=Math.ceil(a1/ss), ms=[], sv=[], fl=[]; let prev=null;
+  for(let i=i0;i<i1;i++){ const mag=spectrumAt(mono,Math.floor((i*ss+0.012)*22050)+WN/2,WN); let best=-1e9,bm=lo;
+    for(let m=lo;m<=hi;m++){const s=salienceLead(mag,m); if(s>best){best=s;bm=m;}}
+    let f=0; if(prev){for(let k=4;k<900;k++){const d=mag[k]-prev[k]; if(d>0)f+=d;}} prev=mag; ms.push(bm); sv.push(best); fl.push(f); }
+  const smax=Math.max(...sv,1), fmax=Math.max(...fl,1), noise=$(".noise",T.el).value/100;
+  const thr=smax*(0.25+noise*0.5), fthr=fmax*(0.08+noise*0.25);
+  const out=[]; let lastM=null, lastOn=-99;
+  for(let k=0;k<ms.length;k++){ if(sv[k]<thr){lastM=null;continue;} const m=ms[k];
+    const attack=fl[k]>fthr, changed=m!==lastM;
+    if(attack||changed){ out.push({m,t:(i0+k)*ss,d:ss,a:sv[k]}); lastM=m; lastOn=k; } }
+  // quitar saltos de una sola casilla (glitches de octava/armónico) entre dos notas iguales
+  return out.filter((n,j)=>!(j>0&&j<out.length-1&&out[j-1].m===out[j+1].m&&Math.abs(n.m-out[j-1].m)>=7&&out[j+1].t-out[j-1].t<=2*ss+1e-6));
+}
 function rootsFromAudio(T,a0,a1){ // devuelve notas {m,t,d,a} con la raíz por paso
   const mono=T.mono, ss=stepSec(), tun=T.tuning(), lo=tun[0], hi=tun[0]+24;
   const i0=Math.floor(a0/ss), i1=Math.ceil(a1/ss), ms=[], sv=[];
@@ -341,7 +359,7 @@ function buildSteps(T){
   byStep.forEach((ns,i)=>{
     if(!ns.length)return;
     let uniq=[...new Map(ns.map(n=>[n.m,n])).values()].sort((a,b)=>a.m-b.m);
-    if(style!=="notes"){ // raíz = la nota más grave con peso suficiente
+    if(style!=="notes"&&style!=="lead"){ // raíz = la nota más grave con peso suficiente
       const maxA=Math.max(...uniq.map(n=>n.a)); const root=uniq.find(n=>n.a>=maxA*0.35)||uniq[0];
       if(style==="root"){ uniq=[root]; }
       else { // power chord: raíz + quinta (+ octava) en cuerdas adyacentes, solo en cuerdas graves
@@ -357,7 +375,7 @@ function buildSteps(T){
     uniq.forEach(n=>{
       let best=null;
       tun.forEach((open,s)=>{ if(used.has(s))return; const f=n.m-open; if(f<0||f>F)return;
-        const cost=(f===0?0:Math.abs(f-hand))+f*0.12+(f>12?3:0);
+        const cost=style==="lead"?(Math.abs(f-hand)*1.2+(f===0?1.5:0)+Math.max(0,f-15)*0.5):((f===0?0:Math.abs(f-hand))+f*0.12+(f>12?3:0));
         if(!best||cost<best.cost)best={s,f,cost}; });
       if(best){used.add(best.s);out.push({s:best.s,f:best.f,d:n.d});}
     });
@@ -488,7 +506,7 @@ $("#stop").onclick=stopAll;
 $("#rate").oninput=e=>{clockT=now();clockBase=performance.now();$("#rateOut").textContent=e.target.value+" %"; all().forEach(x=>x.audio.playbackRate=rate());};
 const requant=()=>Object.values(tracks).forEach(T=>{ if($(".style",T.el).value!=="notes"&&T.buffer){T.rawNotes=[];transcribe(T);} else if(T.rawNotes.length){buildSteps(T);drawTab(T);drawFret(T);} });
 $("#bpm").oninput=()=>{$("#bpm").dataset.user=1; requant();};
-$("#grid").onchange=requant;
+$("#grid").onchange=()=>{$("#grid").dataset.user=1;requant();};
 window.addEventListener("keydown",e=>{ if(e.target.tagName==="INPUT"||e.target.tagName==="SELECT")return; if(e.code==="Space"){e.preventDefault();$("#play").click();}
   if(e.code==="ArrowRight"||e.code==="ArrowLeft"){seekAll(Math.max(0,now()+(e.code==="ArrowRight"?1:-1)*stepSec()));} });
 

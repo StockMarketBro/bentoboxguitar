@@ -190,7 +190,7 @@ const DEFS={
     tunings:{std:{n:"4 cuerdas · Estándar (E A D G)",m:[28,33,38,43]},five:{n:"5 cuerdas · Estándar (B E A D G)",m:[23,28,33,38,43]},drop:{n:"4 cuerdas · Drop D",m:[26,33,38,43]},half:{n:"4 cuerdas · Medio tono abajo",m:[27,32,37,42]},fiveA:{n:"5 cuerdas · Drop A",m:[21,28,33,38,43]},six:{n:"6 cuerdas (B E A D G C)",m:[23,28,33,38,43,48]}},
     minFreq:30,maxFreq:450}
 };
-const STYLES={auto:"Automático (recomendado)",notes:"Notas · IA (arpegios, acordes, limpio)",power:"Power chords (rítmica con distorsión)",lead:"Riff / solo (una nota)",root:"Solo raíz (bajo)"};
+const STYLES={auto:"Automático (recomendado)",chords:"Acordes · rasgueo (acústica, pop)",notes:"Notas · IA (arpegios, melodías, limpio)",power:"Power chords (rítmica con distorsión)",lead:"Riff / solo (una nota)",root:"Solo raíz (bajo)"};
 const nn=m=>NOTE_NAMES[((m%12)+12)%12];
 const $=(q,root=document)=>root.querySelector(q);
 const fmt=s=>`${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,"0")}`;
@@ -224,7 +224,7 @@ function makeTrack(kind){
     <div class="t-setup">
       <div class="box"><h4>2 · Cómo transcribir</h4>
         <div class="row">
-          <select class="style">${Object.entries(STYLES).filter(([k])=>kind==="guitar"?k!=="root":k!=="power").map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select>
+          <select class="style">${Object.entries(STYLES).filter(([k])=>kind==="guitar"?k!=="root":(k!=="power"&&k!=="chords")).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select>
           <span class="chip gray styleChip" hidden></span>
         </div>
         <div class="row" style="margin-top:8px">
@@ -369,16 +369,45 @@ function bpmFromAudio(T){ const mono=T.mono, hop=512, n=Math.min(Math.floor(mono
   const mean=flux.reduce((a,b)=>a+b)/n; for(let k=0;k<n;k++)flux[k]-=mean; let best=0,bb=120;
   for(let b=70;b<=190;b+=0.5){ const lag=60/b*22050/hop; let c=0; for(let k=0;k<n-lag;k++)c+=flux[k]*flux[Math.round(k+lag)]; let c2=0; for(let k=0;k<n-2*lag;k++)c2+=flux[k]*flux[Math.round(k+2*lag)]; c+=0.5*c2; if(c>best){best=c;bb=b;} }
   return Math.round(bb); }
+// ===== Acordes por croma (rasgueo) =====
+const SHAPES={"E":[0,2,2,1,0,0],"Em":[0,2,2,0,0,0],"A":[-1,0,2,2,2,0],"Am":[-1,0,2,2,1,0],"D":[-1,-1,0,2,3,2],"Dm":[-1,-1,0,2,3,1],"G":[3,2,0,0,0,3],"C":[-1,3,2,0,1,0],"E7":[0,2,0,1,0,0],"A7":[-1,0,2,0,2,0],"D7":[-1,-1,0,2,1,2],"G7":[3,2,0,0,0,1],"C7":[-1,3,2,3,1,0],"Em7":[0,2,0,0,0,0],"Am7":[-1,0,2,0,1,0],"Dm7":[-1,-1,0,2,1,1],"F":[1,3,3,2,1,1],"B":[-1,2,4,4,4,2],"Bm":[-1,2,4,4,3,2],"Fm":[1,3,3,1,1,1],"Asus2":[-1,0,2,2,0,0],"Dsus2":[-1,-1,0,2,3,0],"Asus4":[-1,0,2,2,3,0],"Dsus4":[-1,-1,0,2,3,3],"Esus4":[0,2,2,2,0,0],"Cadd9":[-1,3,2,0,3,0]};
+
+function chromaAt(mag){ const v=new Array(12).fill(0); for(let m=40;m<=76;m++){const s=salienceLead(mag,m); if(s>0)v[m%12]+=s;} const sum=v.reduce((a,b)=>a+b,0)||1; return v.map(x=>x/sum); }
+const KMAJ=[6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88], KMIN=[6.33,2.68,3.52,5.38,2.6,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
+function corr(a,b){ const ma=a.reduce((x,y)=>x+y)/12, mb=b.reduce((x,y)=>x+y)/12; let n=0,da=0,db=0; for(let i=0;i<12;i++){n+=(a[i]-ma)*(b[i]-mb);da+=(a[i]-ma)**2;db+=(b[i]-mb)**2;} return n/Math.sqrt(da*db||1); }
+function keyOf(chs){ const g=new Array(12).fill(0); chs.forEach(c=>c.forEach((x,i)=>g[i]+=x)); let best={s:-2}; for(let r=0;r<12;r++)for(const [prof,mode] of [[KMAJ,"maj"],[KMIN,"min"]]){ const rolled=prof.map((_,i)=>prof[(i-r+12)%12]); const s=corr(rolled,g); if(s>best.s)best={s,r,mode}; } return best; }
+const TRI=[["",[0,4,7]],["m",[0,3,7]]];
+function chordsFromAudio(T,a0,a1){ const mono=T.mono, ss=stepSec(), half=grid()*2, i0=Math.floor(a0/ss), i1=Math.ceil(a1/ss), chs=[], fl=[]; let prev=null;
+  for(let i=i0;i<i1;i++){ const mag=spectrumAt(mono,Math.floor(i*ss*22050)+FN/2); chs.push(chromaAt(mag)); let f=0; if(prev)for(let k=4;k<900;k++){const d=mag[k]-prev[k]; if(d>0)f+=d;} fl.push(f); prev=mag; }
+  const key=keyOf(chs); const dia=new Set(); const degs=key.mode==="maj"?[[0,""],[2,"m"],[4,"m"],[5,""],[7,""],[9,"m"]]:[[0,"m"],[3,""],[5,"m"],[7,"m"],[8,""],[10,""]]; degs.forEach(([d,s])=>dia.add(NOTE_NAMES[(key.r+d)%12]+s));
+  T.key=NOTE_NAMES[key.r]+(key.mode==="maj"?"":"m");
+  const detect=(v)=>{ let best=null; for(let r=0;r<12;r++)for(const [suf,iv] of TRI){ const set=iv.map(x=>(r+x)%12); let sc=0; for(let pc=0;pc<12;pc++)sc+=set.includes(pc)?v[pc]:-0.6*v[pc]; const nm=NOTE_NAMES[r]+suf; if(dia.has(nm))sc+=0.12; if(!best||sc>best.sc)best={sc,nm,r,suf}; } return best; };
+  const per=[]; for(let k=0;k+half<=chs.length;k+=half){ const v=new Array(12).fill(0); for(let j=k;j<k+half;j++)chs[j].forEach((x,i)=>v[i]+=x/half); const e=chs.slice(k,k+half).some((c,j)=>fl[k+j]>0)||true; per.push(detect(v)); }
+  for(let k=1;k<per.length-1;k++)if(per[k-1].nm===per[k+1].nm&&per[k].nm!==per[k-1].nm)per[k]=per[k-1];
+  // energía: medios compases casi silenciosos → sin acorde
+  const rms=(i)=>{const c=Math.floor(i*ss*22050); let e=0; for(let j=0;j<2048;j++){const v=mono[c+j]||0;e+=v*v;} return Math.sqrt(e/2048);}; const levels=per.map((_,k)=>{let m=0;for(let j=0;j<half;j++)m=Math.max(m,rms(i0+k*half+j));return m;}); const lmax=Math.max(...levels,1e-6);
+  const sortedF=[...fl].sort((a,b)=>a-b), fthr=(sortedF[Math.floor(sortedF.length/2)]||0)*1.3;
+  const tun=T.tuning(), C=T.capo(), out=[];
+  per.forEach((ch,k)=>{ if(levels[k]<lmax*0.08)return; const sh=chordShape(ch.r,ch.suf,C,tun); if(!sh)return; const prevNm=k>0?per[k-1].nm:null;
+    for(let j=0;j<half;j++){ const i=k*half+j; const hit=(j===0&&(ch.nm!==prevNm||k%2===0))||fl[i]>fthr; if(!hit)continue;
+      sh.forEach(({s,f})=>out.push({m:tun[s]+f,t:(i0+i)*ss,d:ss,a:1,s,f,chord:ch.nm})); } });
+  return out; }
+// forma de acorde relativa al capo: abierta si existe, si no cejilla en forma de E o de A
+function chordShape(rootPc,suf,capo,tun){ if(tun.length!==6)return null; const rel=((rootPc-capo)%12+12)%12, nm=NOTE_NAMES[rel]+suf;
+  let fr=SHAPES[nm]; if(!fr){ const rE=(rel-4+12)%12||12, rA=(rel-9+12)%12||12; const useE=rE<=rA; const r=useE?rE:rA;
+    fr=useE?(suf==="m"?[r,r+2,r+2,r,r,r]:[r,r+2,r+2,r+1,r,r]):(suf==="m"?[-1,r,r+2,r+2,r+1,r]:[-1,r,r+2,r+2,r+2,r]); }
+  return fr.map((f,i)=>f<0?null:{s:i,f}).filter(Boolean); }
 // Reconocer el tipo de parte: power chords / melódico / polifónico (IA)
 function detectStyle(T){ const mono=T.mono, ss=stepSec(), tun=T.tuning(), lo=tun[0], hiL=tun[tun.length-1]+T.d.frets-T.capo(), n=Math.min(Math.floor(T.buffer.duration/ss),600);
-  let voiced=0,power=0,changes=0,lastM=null; const pcs=new Set();
+  let voiced=0,power=0,changes=0,poly=0,lastM=null; const pcs=new Set();
   for(let i=0;i<n;i++){ const mag=spectrumAt(mono,Math.floor((i*ss+0.03)*22050)); let best=-1e9,bm=lo; for(let m=lo;m<=hiL;m++){const s=salienceLead(mag,m); if(s>best){best=s;bm=m;}}
     const f0=f0of(bm), e=peak(mag,f0); if(e<0.5)continue; voiced++; pcs.add(bm%12);
+    const ch=chromaAt(mag); if(ch.filter(x=>x>0.13).length>=3)poly++;
     const fifth=peak(mag,f0*1.5)/e, oct=peak(mag,f0*2)/e, third=Math.max(peak(mag,f0*Math.pow(2,4/12)),peak(mag,f0*Math.pow(2,3/12)))/e;
     if(fifth>0.35&&oct>0.25&&third<0.35)power++; if(lastM!==null&&bm!==lastM)changes++; lastM=bm; }
   if(!voiced)return "notes"; const pw=power/voiced, ch=changes/voiced;
   if(T.kind==="bass")return ch>0.45?"lead":"root";
-  if(pw>0.5)return "power"; if(ch>0.45&&pw<0.3)return "lead"; return "notes"; }
+  if(pw>0.5)return "power"; if(poly/voiced>0.5)return "chords"; if(ch>0.45&&pw<0.3)return "lead"; return "notes"; }
 
 // ===== Transcripción =====
 async function transcribe(T){
@@ -388,8 +417,8 @@ async function transcribe(T){
   const st=effStyle(T);
   if(st!=="notes"){ msg.textContent="Detectando…"; await new Promise(r=>setTimeout(r,30));
     if(!$("#bpm").dataset.user){const b=bpmFromAudio(T); if(b)$("#bpm").value=b;}
-    const fresh=st==="lead"?leadFromAudio(T,a0,a1):rootsFromAudio(T,a0,a1); T.notesRaw=null;
-    T.rawNotes=[...T.rawNotes.filter(n=>n.t<a0||n.t>=a1),...fresh]; finish(T); msg.textContent=`${fresh.length} ${st==="lead"?"notas":"raíces"} en ${Math.round(a0)}–${Math.round(a1)} s · BPM ${bpm()}. Si la tab va desfasada, ajusta el BPM.`; return; }
+    const fresh=st==="lead"?leadFromAudio(T,a0,a1):st==="chords"?chordsFromAudio(T,a0,a1):rootsFromAudio(T,a0,a1); T.notesRaw=null;
+    T.rawNotes=[...T.rawNotes.filter(n=>n.t<a0||n.t>=a1),...fresh]; finish(T); msg.textContent=st==="chords"?`Acordes detectados · tonalidad ${T.key||"?"} · BPM ${bpm()}${T.capo()?" · formas con capo "+T.capo():""}. Si la tab va desfasada, ajusta el BPM.`:`${fresh.length} ${st==="lead"?"notas":"raíces"} en ${Math.round(a0)}–${Math.round(a1)} s · BPM ${bpm()}. Si la tab va desfasada, ajusta el BPM.`; return; }
   if(!model){msg.textContent="La IA aún se está cargando (o no hay conexión). Prueba otro estilo.";return;}
   prog.hidden=false; bar.style.width="0"; msg.textContent="Preparando audio…";
   const len=Math.ceil((a1-a0)*22050), off=new OfflineAudioContext(1,len,22050), s=off.createBufferSource(); s.buffer=T.buffer; s.connect(off.destination); s.start(0,a0,a1-a0);
@@ -474,7 +503,9 @@ function buildSteps(T){
   // power chords: forma fija raíz-quinta-octava en cuerdas graves, elegida por continuidad
   const seq=[]; // {i, cands}
   let hand=3;
-  byStep.forEach((ns,i)=>{ if(!ns.length)return; let uniq=[...new Map(ns.map(n=>[n.m,n])).values()].sort((a,b)=>a.m-b.m);
+  byStep.forEach((ns,i)=>{ if(!ns.length)return;
+    if(style==="chords"&&ns[0].s!==undefined){ const out=ns.filter(n=>n.s!==undefined).map(n=>({s:n.s,f:n.f})); out.p=shapePos(out); steps[i]=out; return; }
+    let uniq=[...new Map(ns.map(n=>[n.m,n])).values()].sort((a,b)=>a.m-b.m);
     if(style==="power"||style==="root"){ const maxA=Math.max(...uniq.map(n=>n.a)); const root=uniq.find(n=>n.a>=maxA*0.35)||uniq[0];
       if(style==="root")uniq=[root]; else { let rm=root.m; while(rm-12>=tun[0])rm-=12; const cands=[];
         for(let s=0;s+1<Math.min(tun.length,4);s++){const f=rm-tun[s]; if(f>=0&&f<=F-2&&tun[s+1]-tun[s]===5)cands.push({s,f});}
@@ -503,13 +534,12 @@ function chordsFor(T){ const tun=T.tuning(), per=grid()*2, out=[], B=tracks.bass
     out.push(chordName(pcw,bassM===null?null:bassM%12)); } return out; }
 function suggestCapo(T){ if(T.kind!=="guitar"||!T.rawNotes.length)return; const btn=$(".capoSug",T.el);
   const base=T.d.tunings[$(".tuning",T.el).value].m[0], lowest=Math.min(...T.rawNotes.map(n=>n.m)), maxC=Math.max(0,Math.min(9,lowest-base));
-  const chords=chordsFor(T).filter(Boolean); if(chords.length<4){btn.hidden=true;return;} const open={maj:[4,9,2,7,0],min:[4,9,2]}; let best={c:0,score:-1};
+  const chords=chordsFor(T).filter(Boolean); if(chords.length<4){btn.hidden=true;return;} const open={maj:[4,9,2,7,0,5],min:[4,9,2]}; let best={c:0,score:-1};
   for(let c=0;c<=maxC;c++){ let sc=0; chords.forEach(ch=>{ const m=ch.match(/^([A-G]#?)(.*)$/); if(!m)return; const root=(NOTE_NAMES.indexOf(m[1])-c+12)%12, q=m[2].replace(/\/.*$/,"");
       if(q===""&&open.maj.includes(root))sc+=1; else if(/^m(7)?$/.test(q)&&open.min.includes(root))sc+=1; else if(q==="5")sc+=0.2; }); sc-=c*0.02; if(sc>best.score)best={c,score:sc}; }
   if(best.c!==T.capo()&&best.score>=chords.length*0.5){btn.hidden=false;btn.dataset.c=best.c;btn.textContent=best.c?`💡 Capo en ${best.c} → acordes abiertos`:"💡 Quitar capo";} else btn.hidden=true; }
 
 // Diagrama del acorde actual (formas abiertas conocidas; si no, la forma tocada en el paso)
-const SHAPES={"E":[0,2,2,1,0,0],"Em":[0,2,2,0,0,0],"A":[-1,0,2,2,2,0],"Am":[-1,0,2,2,1,0],"D":[-1,-1,0,2,3,2],"Dm":[-1,-1,0,2,3,1],"G":[3,2,0,0,0,3],"C":[-1,3,2,0,1,0],"E7":[0,2,0,1,0,0],"A7":[-1,0,2,0,2,0],"D7":[-1,-1,0,2,1,2],"G7":[3,2,0,0,0,1],"C7":[-1,3,2,3,1,0],"Em7":[0,2,0,0,0,0],"Am7":[-1,0,2,0,1,0],"Dm7":[-1,-1,0,2,1,1],"F":[1,3,3,2,1,1],"B":[-1,2,4,4,4,2],"Bm":[-1,2,4,4,3,2],"Fm":[1,3,3,1,1,1],"Asus2":[-1,0,2,2,0,0],"Dsus2":[-1,-1,0,2,3,0],"Asus4":[-1,0,2,2,3,0],"Dsus4":[-1,-1,0,2,3,3],"Esus4":[0,2,2,2,0,0],"Cadd9":[-1,3,2,0,3,0]};
 function diagramSVG(name,frets,fromFret){ const n=frets.length, W=20*(n-1)+24, top=18; let s=`<svg viewBox="0 0 ${W+10} 110" xmlns="http://www.w3.org/2000/svg"><text x="${W/2+5}" y="11" font-size="11" font-weight="700" fill="#ecebe6" text-anchor="middle" font-family="Syne">${name}</text>`;
   for(let f=0;f<=4;f++)s+=`<line x1="12" x2="${12+20*(n-1)}" y1="${top+f*18}" y2="${top+f*18}" stroke="#9a9a9a" stroke-width="${f===0&&fromFret===1?3:1}"/>`;
   for(let i=0;i<n;i++)s+=`<line x1="${12+i*20}" x2="${12+i*20}" y1="${top}" y2="${top+72}" stroke="#9a9a9a"/>`;

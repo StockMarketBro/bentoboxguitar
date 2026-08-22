@@ -258,7 +258,14 @@ function makeTrack(kind){
       <label class="file btn-ghost" style="margin-left:auto;border:1px solid var(--line2);border-radius:8px;padding:5px 10px;font-size:12px">📄 Tab de referencia (.txt)<input type="file" class="reffile" accept=".txt,text/plain"></label>
       <span class="refinfo hint"></span>
     </div>
-    <div class="fb"><svg viewBox="0 0 1100 230" role="img" aria-label="Mástil ${d.label}"></svg>
+    <div class="fb">
+      <div class="row fbopts" style="padding:2px 4px 6px">
+        <label class="lbl">Mostrar <select class="fblabel"><option value="name">nombre de nota</option><option value="finger">dedo</option><option value="fret">traste</option></select></label>
+        <label class="lbl"><input type="checkbox" class="fbbar" checked> Notas del compás (atenuadas)</label>
+        <label class="lbl"><input type="checkbox" class="fbnext" checked> Próximas notas</label>
+        <label class="lbl"><input type="checkbox" class="fblefty"> Zurdo</label>
+      </div>
+      <svg viewBox="0 0 1100 230" role="img" aria-label="Mástil ${d.label}"></svg>
       <div class="fb-info"><span class="posInfo">Mástil: notas del paso (con nº de dedo), caja de posición sombreada y, punteadas, las notas que vienen. Clic en una posición = mover / añadir / quitar nota.</span><span class="count"></span><span class="diagram"></span></div></div>
   </div>`;
   $("#tracks").appendChild(el);
@@ -290,6 +297,7 @@ function makeTrack(kind){
   $(".autopm",el).onchange=()=>{ if(T.buffer&&effStyle(T)!=="notes"){T.rawNotes=[];transcribe(T);} };
   $(".tab canvas",el).onclick=e=>{ if(!T.steps.length)return; const r=e.target.getBoundingClientRect(); const x=(e.clientX-r.left)*(e.target.width/r.width), y=(e.clientY-r.top)*(e.target.height/r.height); if(y<22)return;
     const i=Math.floor((x-40)/COLW)+T.view; if(i>=0&&i<T.steps.length){T.cursor=i;seekAll(i*stepSec());} };
+  el.querySelectorAll(".fbopts input, .fbopts select").forEach(c=>c.onchange=()=>drawFret(T));
   drawFret(T); return T;
 }
 const effStyle=T=>{ const v=$(".style",T.el).value; return v==="auto"?(T.autoStyle||"notes"):v; };
@@ -444,6 +452,10 @@ function shapeCost(sh,style){ if(sh.fromRef)return -3; let c=shapeSpan(sh)*0.6+(
   if(_bass){ c+=sh.reduce((a,x)=>a+x.s*0.18,0); } // el bajista prefiere cuerdas graves
   c+=sh.filter(x=>x.f>0).reduce((a,x)=>a+Math.max(0,x.f-(sh.p||0)-3)*2+(x.f===(sh.p||0)+3?0.25:0),0); // dedo fuera de la caja; meñique estirado cuesta un poco
   if(style==="lead"){ c+=sh.some(x=>x.f===0)?(_bass?0.25:0.8):0; } // en solos se evitan cuerdas al aire (menos en bajo)
+  if(sh.length>=2){ const p=sh.p||0; const fretted=sh.filter(x=>x.f>0); const onIndex=fretted.filter(x=>x.f===p).length;
+    if(fretted.length>4&&onIndex<2)c+=2.5;                         // 5+ dedos sin cejilla: imposible
+    if(fretted.length>=3&&onIndex>=2&&p>0)c+=0.6;                     // cejilla: posible pero cuesta más que forma abierta
+    const fingersNeeded=new Set(fretted.filter(x=>x.f!==p).map(x=>x.f)).size+(onIndex?1:0); if(fingersNeeded>4)c+=3; }
   else { c+=sh.length>1&&sh.some(x=>x.f===0)&&shapePos(sh)>4?1.5:0; }  // al aire + posición alta = raro
   return c; }
 function transCost(a,b,style,gapSteps){ if(!a||!b)return 0; const pa=a.p||0, pb=b.p||0;
@@ -539,11 +551,11 @@ const TECH_LABEL={h:"h",sl:"/",b:"b",v:"~",x:"x"};
 // ===== Tab (canvas) =====
 const COLW=30, ROWH=22;
 function drawTab(T){
-  const cv=$(".tab canvas",T.el), empty=$(".tab .empty",T.el), n=T.tuning().length, TOP=22, W=1180, H=n*ROWH+40+TOP; cv.width=W; cv.height=H;
+  const cv=$(".tab canvas",T.el), empty=$(".tab .empty",T.el), n=T.tuning().length, TOP=30, BOT=26, W=1180, H=n*ROWH+40+TOP+BOT; cv.width=W; cv.height=H;
   const g=cv.getContext("2d"); g.clearRect(0,0,W,H);
   if(!T.steps.length){empty.hidden=false;cv.classList.add("blank");return;} empty.hidden=true; cv.classList.remove("blank");
   const cols=Math.floor((W-40)/COLW); if(T.cursor<T.view||T.cursor>=T.view+cols-2)T.view=Math.max(0,T.cursor-Math.floor(cols/3));
-  const tun=T.tuning(), perBar=grid()*4, half=grid()*2, chords=chordsFor(T), C=T.capo();
+  const tun=T.tuning(), perBar=grid()*4, half=grid()*2, chords=chordsFor(T), C=T.capo(); const evAt=new Map(); events(T).forEach(e=>evAt.set(e.i,e));
   if(C){g.font="700 11px Syne";g.fillStyle="#888";g.textAlign="right";g.textBaseline="middle";g.fillText(`CAPO ${C}`,W-8,10);}
   g.save(); g.translate(0,TOP);
   // bucle A-B
@@ -555,10 +567,18 @@ function drawTab(T){
   g.textAlign="center"; g.font="12px 'DM Mono'"; g.fillStyle="#999";
   for(let r=0;r<n;r++){const y=20+r*ROWH; g.fillText(nn(tun[n-1-r]),16,y); g.strokeStyle="#cfcfcf"; g.lineWidth=1; g.beginPath(); g.moveTo(36,y); g.lineTo(W-6,y); g.stroke();}
   for(let c=0;c<cols;c++){ const i=T.view+c; if(i>=T.steps.length)break; const x=40+c*COLW+COLW/2;
-    if(i%perBar===0){g.strokeStyle="#8a8a8a";g.lineWidth=1.5;g.beginPath();g.moveTo(x-COLW/2,20);g.lineTo(x-COLW/2,20+(n-1)*ROWH);g.stroke(); g.fillStyle="#999";g.font="10px 'DM Mono'";g.fillText(Math.floor(i/perBar)+1,x-COLW/2+2,H-TOP-8);}
-    if(i===T.cursor){g.fillStyle=T.kind==="bass"?"rgba(31,122,224,.14)":"rgba(227,20,45,.12)";g.fillRect(x-COLW/2,6,COLW,(n-1)*ROWH+28);g.fillStyle=T.d.color;g.beginPath();g.arc(x,6,3.5,0,7);g.fill();}
-    if(T.steps[i].length&&T.steps[i].p&&(i===0||!T.steps.slice(Math.max(0,i-grid()*4),i).some(s=>s.length&&s.p===T.steps[i].p))&&T.steps[i].p>1){ g.fillStyle="#a79f8f"; g.font="9px 'DM Mono'"; g.textAlign="center"; g.fillText("pos "+T.steps[i].p,x,-1); }
-    if(T.steps[i].pm){ g.fillStyle="#6b6352"; g.font="700 9px 'DM Mono'"; g.textAlign="center"; g.fillText("P.M.",x,H-TOP-22); const nx=T.steps[i+1]; if(nx&&nx.pm){g.strokeStyle="#6b6352";g.lineWidth=1;g.beginPath();g.moveTo(x+10,H-TOP-22);g.lineTo(x+COLW-2,H-TOP-22);g.stroke();} }
+    if(i%perBar===0){g.strokeStyle="#8a8a8a";g.lineWidth=1.5;g.beginPath();g.moveTo(x-COLW/2,20);g.lineTo(x-COLW/2,20+(n-1)*ROWH);g.stroke(); g.fillStyle="#999";g.font="10px 'DM Mono'";g.fillText(Math.floor(i/perBar)+1,x-COLW/2+2,H-TOP-6);}
+    if(i===T.cursor){g.fillStyle=T.kind==="bass"?"rgba(31,122,224,.14)":"rgba(227,20,45,.12)";g.fillRect(x-COLW/2,-TOP+4,COLW,H-8);g.fillStyle=T.d.color;g.beginPath();g.arc(x,6,3.5,0,7);g.fill();}
+    if(T.steps[i].length&&T.steps[i].p&&(i===0||!T.steps.slice(Math.max(0,i-grid()*4),i).some(s=>s.length&&s.p===T.steps[i].p))&&T.steps[i].p>1){ g.fillStyle="#a79f8f"; g.font="9px 'DM Mono'"; g.textAlign="center"; g.fillText("pos "+T.steps[i].p,x,-22); }
+    if(T.steps[i].pm){ g.fillStyle="#6b6352"; g.font="700 9px 'DM Mono'"; g.textAlign="center"; g.fillText("P.M.",x,H-TOP-BOT-6); const nx=T.steps[i+1]; if(nx&&nx.pm){g.strokeStyle="#6b6352";g.lineWidth=1;g.beginPath();g.moveTo(x+10,H-TOP-BOT-6);g.lineTo(x+COLW-2,H-TOP-BOT-6);g.stroke();} }
+    // ritmo: plica bajo la tab; duración = hasta la siguiente nota del compás
+    if(T.steps[i].length){ const ev=evAt.get(i); const dur=ev?ev.dur:1; const yb=20+(n-1)*ROWH+6, len=16; g.strokeStyle="#4a443a"; g.lineWidth=1.4; g.beginPath(); g.moveTo(x,yb); g.lineTo(x,yb+len); g.stroke();
+      const beats=dur/grid(); // en negras
+      if(beats<1){ const flags=beats<=0.25?2:1; for(let q=0;q<flags;q++){ g.beginPath(); g.moveTo(x,yb+len-q*4); g.quadraticCurveTo(x+7,yb+len-q*4-3,x+5,yb+len-q*4+4); g.stroke(); } }
+      if(beats>=2&&beats<4){ g.fillStyle="#4a443a"; g.beginPath(); g.arc(x,yb+len+5,1.6,0,7); g.fill(); g.fillText("",x,yb); } // blanca: puntito
+      if(beats>=4){ g.strokeStyle="#4a443a"; g.beginPath(); g.arc(x,yb+len+5,3,0,7); g.stroke(); }     // redonda: círculo
+      // dedo encima (solo líneas de una nota)
+      const st=T.steps[i]; if(st.length===1&&st[0].f>0&&st.p){ g.fillStyle="#8a8275"; g.font="9px 'DM Mono'"; g.textAlign="center"; g.fillText(String(Math.min(4,Math.max(1,st[0].f-st.p+1))),x,-1-10); } }
     T.steps[i].forEach(({s,f,t})=>{ const y=20+(n-1-s)*ROWH, txt=(t==="x"?"x":String(f))+(t&&t!=="x"?TECH_LABEL[t]:""); g.font="500 14px 'DM Mono'"; const w=g.measureText(txt).width+6; g.fillStyle="#fff"; g.fillRect(x-w/2,y-9,w,18); g.fillStyle=i===T.cursor?T.d.color:"#121212"; g.fillText(txt,x,y); }); }
   g.restore();
 }
@@ -576,14 +596,19 @@ function drawFret(T){
   for(let i=0;i<n;i++){const y=Y0+H-i*gap, th=T.kind==="bass"?4.5-i*.6:3.2-i*.4; s+=`<line x1="${X0-6}" x2="${X0+W}" y1="${y}" y2="${y}" stroke="#d6d1c3" stroke-width="${th}" opacity=".85"/><text x="${X0-22}" y="${y+4}" font-size="12" fill="#aaa" text-anchor="middle" font-family="DM Mono">${nn(tun[i])}</text>`;}
   if(C>0)s+=`<rect x="${X0}" y="${Y0-14}" width="${fx(C)-X0-4}" height="${H+28}" fill="#000" opacity=".45"/><rect x="${fx(C)-9}" y="${Y0-22}" width="10" height="${H+44}" rx="4" fill="#e9e2cf" stroke="#8a8275"/><text x="${fx(C)-4}" y="${Y0-26}" font-size="10" fill="#ddd" text-anchor="middle" font-family="Syne" font-weight="700">CAPO</text>`;
   for(let i=0;i<n;i++)for(let f=0;f<=F-C;f++)s+=`<g class="pos" data-s="${i}" data-f="${f}"><circle cx="${px(f)}" cy="${Y0+H-i*gap}" r="11"/></g>`;
-  const cur=T.steps[T.cursor]||[]; const P=cur.p||0;
+  const cur=T.steps[T.cursor]||[]; const P=cur.p||0; const labelMode=$(".fblabel",T.el).value, showBar=$(".fbbar",T.el).checked, showNext=$(".fbnext",T.el).checked;
+  // notas del compás actual, atenuadas (Soundslice-style: dónde "vive" el pasaje)
+  if(showBar&&T.steps.length){ const pb=grid()*4, b0=Math.floor(T.cursor/pb)*pb, seenK=new Set();
+    for(let k=b0;k<b0+pb&&k<T.steps.length;k++)T.steps[k].forEach(({s:si,f})=>{ const key=si+":"+f; if(seenK.has(key)||cur.find(x=>x.s===si&&x.f===f))return; seenK.add(key); const y=Y0+H-si*gap;
+      s+=`<circle cx="${px(f)}" cy="${y}" r="9" fill="${T.d.color}" opacity=".28" pointer-events="none"/><text x="${px(f)}" y="${y+3.5}" font-size="9" fill="#fff" opacity=".75" text-anchor="middle" font-family="DM Mono" pointer-events="none">${f}</text>`; }); }
   if(P>0&&cur.length){ const xa=fx(P+C-1)+2, xb=fx(Math.min(F,P+C+3))-2; s+=`<rect x="${xa}" y="${Y0-14}" width="${xb-xa}" height="${H+28}" fill="${T.d.color}" opacity=".10" rx="4"/><text x="${(xa+xb)/2}" y="${Y0-18}" font-size="9" fill="${T.d.color}" text-anchor="middle" font-family="DM Mono">posición ${P}</text>`; }
   // próximas notas (fantasma) para anticipar
   let nx=null; for(let k=T.cursor+1;k<T.steps.length&&k<T.cursor+grid()*4;k++){ if(T.steps[k].length){nx=T.steps[k];break;} }
-  if(nx)nx.forEach(({s:si,f})=>{ if(cur.find(x=>x.s===si&&x.f===f))return; const y=Y0+H-si*gap; s+=`<circle cx="${px(f)}" cy="${y}" r="11" fill="none" stroke="${T.d.color}" stroke-width="1.5" stroke-dasharray="3 3" opacity=".7" pointer-events="none"/>`; });
+  if(nx&&showNext)nx.forEach(({s:si,f})=>{ if(cur.find(x=>x.s===si&&x.f===f))return; const y=Y0+H-si*gap; s+=`<circle cx="${px(f)}" cy="${y}" r="11" fill="none" stroke="${T.d.color}" stroke-width="1.5" stroke-dasharray="3 3" opacity=".7" pointer-events="none"/>`; });
   cur.forEach(({s:si,f,t})=>{const y=Y0+H-si*gap; const finger=f===0?"":Math.min(4,Math.max(1,f-P+1)); const muted=t==="x";
-    s+=`<g pointer-events="none"><circle cx="${px(f)}" cy="${y}" r="13" fill="${muted?"#555":T.d.color}"/><text x="${px(f)}" y="${y+4}" font-size="10" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter">${muted?"x":nn(tun[si]+f)}</text>${finger?`<circle cx="${px(f)+11}" cy="${y-11}" r="6.5" fill="#111" stroke="${T.d.color}" stroke-width="1"/><text x="${px(f)+11}" y="${y-8}" font-size="8" font-weight="700" fill="#fff" text-anchor="middle" font-family="DM Mono">${finger}</text>`:""}</g>`;});
-  svg.innerHTML=s;
+    s+=`<g pointer-events="none"><circle cx="${px(f)}" cy="${y}" r="13" fill="${muted?"#555":T.d.color}"/><text x="${px(f)}" y="${y+4}" font-size="${labelMode==="name"?10:11}" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter">${muted?"x":labelMode==="finger"?(finger||"0"):labelMode==="fret"?f:nn(tun[si]+f)}</text>${finger&&labelMode!=="finger"?`<circle cx="${px(f)+11}" cy="${y-11}" r="6.5" fill="#111" stroke="${T.d.color}" stroke-width="1"/><text x="${px(f)+11}" y="${y-8}" font-size="8" font-weight="700" fill="#fff" text-anchor="middle" font-family="DM Mono">${finger}</text>`:""}</g>`;});
+  const lefty=$(".fblefty",T.el).checked; svg.innerHTML=lefty?`<g transform="translate(1100,0) scale(-1,1)">${s}</g>`:s;
+  if(lefty)svg.querySelectorAll("text").forEach(t=>{ const x=+t.getAttribute("x"), y=+t.getAttribute("y"); t.setAttribute("transform",`translate(${2*x},0) scale(-1,1)`); });
   svg.querySelectorAll(".pos").forEach(g=>g.onclick=()=>{ if(!T.steps.length)return; const si=+g.dataset.s,f=+g.dataset.f,st=T.steps[T.cursor],k=st.findIndex(x=>x.s===si);
     if(k>=0&&st[k].f===f)st.splice(k,1); else if(k>=0)st[k].f=f; else st.push({s:si,f}); drawTab(T);drawFret(T);preview(T,st);
     $(".posInfo",T.el).textContent=st.length?`Paso ${T.cursor+1}: `+st.map(x=>`${nn(tun[x.s])} ${x.f} (${nn(tun[x.s]+x.f)})`).join(" + "):`Paso ${T.cursor+1}: silencio`; });

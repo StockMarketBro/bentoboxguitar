@@ -501,7 +501,9 @@ function candidatesFor(notes,tun,F,style){
     return res; };
   for(let p=1;p<=F-3;p++){ const r=tryPos(p); if(!r)continue; const key=r.map(x=>x.s+":"+x.f).join(",")+"@"+(r.every(x=>x.f===0)?"open":p); if(seen.has(key))continue; seen.add(key); r.p=r.every(x=>x.f===0)?0:p; out.push(r); }
   // sin restricción de posición (notas sueltas lejanas): cada nota en su cuerda más razonable
-  if(!out.length){ const used=new Set(), res=[]; for(const n of [...notes].sort((a,b)=>a.m-b.m)){ let best=null; tun.forEach((open,s)=>{ if(used.has(s))return; const f=n.m-open; if(f<0||f>F)return; if(!best||f<best.f)best={s,f}; }); if(best){used.add(best.s);res.push(best);} } if(res.length){res.p=shapePos(res);out.push(res);} }
+  if(!out.length){ // ninguna posición abarca todo: asignar de agudo a grave buscando el traste más bajo, y descartar notas que exigirían un traste absurdo (>12 cuando el resto está abajo)
+    const used=new Set(), res=[]; for(const n of [...notes].sort((a,b)=>b.m-a.m)){ let best=null; tun.forEach((open,s)=>{ if(used.has(s))return; const f=n.m-open; if(f<0||f>F)return; if(!best||f<best.f)best={s,f}; }); if(best){used.add(best.s);res.push(best);} }
+    const low=res.filter(x=>x.f<=5).length; const keep=res.filter(x=>!(x.f>12&&low>=2)); if(keep.length){keep.p=shapePos(keep);out.push(keep);} }
   return out;
 }
 const shapePos=sh=>{ const fr=sh.filter(x=>x.f>0).map(x=>x.f); return fr.length?Math.min(...fr):0; };

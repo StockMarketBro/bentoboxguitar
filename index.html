@@ -140,7 +140,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;margin-top:30px}
       <label class="lbl">Transponer <button class="btn-ghost" id="trDown" style="padding:4px 9px">−</button><output id="trOut">0</output><button class="btn-ghost" id="trUp" style="padding:4px 9px">+</button></label>
       <div class="sep"></div>
       <button id="practiceBtn">🎯 Ensayo</button>
-      <select id="exportSel" disabled><option value="">Exportar…</option><option value="txt">Tab en texto (.txt)</option><option value="xml">MusicXML → Guitar Pro / MuseScore</option><option value="mid">MIDI (.mid)</option></select>
+      <select id="exportSel" disabled><option value="">Exportar…</option><option value="txt">Tab en texto (.txt)</option><option value="gp">Guitar Pro (.gp)</option><option value="xml">MusicXML (MuseScore, Sibelius…)</option><option value="mid">MIDI (.mid)</option></select>
       <button id="printBtn" disabled>🖨 Imprimir</button>
       <button id="saveProj" disabled>Guardar .bbx</button>
       <div class="practice" id="practice">
@@ -190,7 +190,7 @@ const DEFS={
     tunings:{std:{n:"4 cuerdas · Estándar (E A D G)",m:[28,33,38,43]},five:{n:"5 cuerdas · Estándar (B E A D G)",m:[23,28,33,38,43]},drop:{n:"4 cuerdas · Drop D",m:[26,33,38,43]},half:{n:"4 cuerdas · Medio tono abajo",m:[27,32,37,42]},fiveA:{n:"5 cuerdas · Drop A",m:[21,28,33,38,43]},six:{n:"6 cuerdas (B E A D G C)",m:[23,28,33,38,43,48]}},
     minFreq:30,maxFreq:450}
 };
-const STYLES={auto:"Automático (recomendado)",chords:"Acordes · rasgueo (acústica, pop)",notes:"Notas · IA (arpegios, melodías, limpio)",power:"Power chords (rítmica con distorsión)",lead:"Riff / solo (una nota)",root:"Solo raíz (bajo)"};
+const STYLES={notes:"Notas · IA (Basic Pitch) — recomendado",auto:"Automático (según la pista)",chords:"Acordes · rasgueo (acústica, pop)",power:"Power chords (rítmica con distorsión)",lead:"Riff / solo (una nota)",root:"Solo raíz (bajo)"};
 const nn=m=>NOTE_NAMES[((m%12)+12)%12];
 const $=(q,root=document)=>root.querySelector(q);
 const fmt=s=>`${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,"0")}`;
@@ -242,6 +242,7 @@ function makeTrack(kind){
             <label class="lbl">Sensibilidad <input type="range" class="sens" min="20" max="80" value="50"></label>
             <label class="lbl">Filtro ruido <input type="range" class="noise" min="0" max="60" value="20"></label>
             <label class="lbl"><input type="checkbox" class="clean" checked> Limpieza de armónicos</label>
+            <label class="lbl"><input type="checkbox" class="snap" checked> Encajar en formas de acorde</label>
           </div>
         </details>
       </div>
@@ -280,7 +281,7 @@ function makeTrack(kind){
   $(".tuning",el).onchange=re;
   if(kind==="guitar"){ $(".capo",el).onchange=()=>{$(".capoSug",el).hidden=true;re();}; $(".capoSug",el).onclick=()=>{$(".capo",el).value=$(".capoSug",el).dataset.c;$(".capo",el).onchange();}; }
   $(".retrans",el).onclick=()=>{T.autoStyle=null;T.rawNotes=[];transcribe(T);};
-  [$(".noise",el),$(".clean",el)].forEach(c=>c.oninput=c.onchange=()=>{ if(effStyle(T)!=="notes"){T.rawNotes=[];transcribe(T);return;} if(!T.notesRaw)return; T.rawNotes=cleanNotes(T.notesRaw,T);buildSteps(T);drawTab(T);drawFret(T); $(".msg",el).textContent=`${T.rawNotes.length} notas tras el filtro.`; });
+  [$(".noise",el),$(".clean",el),$(".snap",el)].forEach(c=>c.oninput=c.onchange=()=>{ if(effStyle(T)!=="notes"){T.rawNotes=[];transcribe(T);return;} if(!T.notesRaw)return; T.rawNotes=cleanNotes(T.notesRaw,T);buildSteps(T);drawTab(T);drawFret(T); $(".msg",el).textContent=`${T.rawNotes.length} notas tras el filtro.`; });
   $(".mute",el).onclick=e=>{T.muted=!T.muted;e.target.classList.toggle("on",T.muted);el.classList.toggle("muted",T.muted);applyMix();};
   $(".solo",el).onclick=e=>{T.solo=!T.solo;e.target.classList.toggle("on",T.solo);applyMix();};
   $(".vol",el).oninput=applyMix;
@@ -366,8 +367,9 @@ function leadFromAudio(T,a0,a1){ const mono=T.mono, ss=stepSec(), tun=T.tuning()
   return out.filter((n,j)=>!(j>0&&j<out.length-1&&out[j-1].m===out[j+1].m&&Math.abs(n.m-out[j-1].m)>=7&&out[j+1].t-out[j-1].t<=2*ss+1e-6)); }
 function bpmFromAudio(T){ const mono=T.mono, hop=512, n=Math.min(Math.floor(mono.length/hop)-8,Math.floor(60*22050/hop)); if(n<200)return null;
   let prev=null; const flux=new Float32Array(n); for(let k=0;k<n;k++){ const mag=spectrumAt(mono,k*hop+FN/2); if(prev){let f=0;for(let i=2;i<600;i++){const d=mag[i]-prev[i];if(d>0)f+=d;}flux[k]=f;} prev=mag; }
-  const mean=flux.reduce((a,b)=>a+b)/n; for(let k=0;k<n;k++)flux[k]-=mean; let best=0,bb=120;
-  for(let b=70;b<=190;b+=0.5){ const lag=60/b*22050/hop; let c=0; for(let k=0;k<n-lag;k++)c+=flux[k]*flux[Math.round(k+lag)]; let c2=0; for(let k=0;k<n-2*lag;k++)c2+=flux[k]*flux[Math.round(k+2*lag)]; c+=0.5*c2; if(c>best){best=c;bb=b;} }
+  const mean=flux.reduce((a,b)=>a+b)/n; for(let k=0;k<n;k++)flux[k]-=mean;
+  const ac=(lag)=>{const L=Math.round(lag); let c=0; for(let k=0;k<n-L;k++)c+=flux[k]*flux[k+L]; return c/(n-L);};
+  let best=-Infinity,bb=120; for(let b=60;b<=200;b+=0.5){ const lag=60/b*22050/hop; const s=(ac(lag)+0.5*ac(2*lag)+0.25*ac(4*lag))*Math.exp(-0.5*Math.pow(Math.log2(b/120)/0.5,2)); if(s>best){best=s;bb=b;} }
   return Math.round(bb); }
 // ===== Acordes por croma (rasgueo) =====
 const SHAPES={"E":[0,2,2,1,0,0],"Em":[0,2,2,0,0,0],"A":[-1,0,2,2,2,0],"Am":[-1,0,2,2,1,0],"D":[-1,-1,0,2,3,2],"Dm":[-1,-1,0,2,3,1],"G":[3,2,0,0,0,3],"C":[-1,3,2,0,1,0],"E7":[0,2,0,1,0,0],"A7":[-1,0,2,0,2,0],"D7":[-1,-1,0,2,1,2],"G7":[3,2,0,0,0,1],"C7":[-1,3,2,3,1,0],"Em7":[0,2,0,0,0,0],"Am7":[-1,0,2,0,1,0],"Dm7":[-1,-1,0,2,1,1],"F":[1,3,3,2,1,1],"B":[-1,2,4,4,4,2],"Bm":[-1,2,4,4,3,2],"Fm":[1,3,3,1,1,1],"Asus2":[-1,0,2,2,0,0],"Dsus2":[-1,-1,0,2,3,0],"Asus4":[-1,0,2,2,3,0],"Dsus4":[-1,-1,0,2,3,3],"Esus4":[0,2,2,2,0,0],"Cadd9":[-1,3,2,0,3,0]};
@@ -455,6 +457,14 @@ function refGuide(T){ // asigna a cada nota detectada la cuerda/traste de la ref
   if(!T.ref||!T.ref.length)return null; const ref=T.ref; let ptr=0; const guide=new Map(); const sorted=[...T.rawNotes].sort((a,b)=>a.t-b.t);
   sorted.forEach(n=>{ const m=n.m+transpose; for(let k=ptr;k<Math.min(ref.length,ptr+12);k++){ if(ref[k].m===m){ guide.set(n,ref[k]); ptr=k+1; return; } } });
   return guide; }
+// Si las notas detectadas (3+) son un acorde conocido, usar su forma (C, G, Am, F… relativas al capo)
+function snapToShape(notes,tun,capo){ const pcs=new Set(notes.map(n=>((n.m%12)+12)%12)); if(pcs.size<2)return null;
+  let best=null; for(let r=0;r<12;r++)for(const [suf,iv] of [["",[0,4,7]],["m",[0,3,7]],["7",[0,4,7,10]],["m7",[0,3,7,10]],["sus4",[0,5,7]],["sus2",[0,2,7]]]){ const set=new Set(iv.map(x=>(r+x)%12)); const hit=[...pcs].filter(pc=>set.has(pc)).length, extra=pcs.size-hit; if(extra>0||hit<2)continue;
+    const sc=hit-iv.length*0.1; if(!best||sc>best.sc)best={sc,r,suf}; }
+  if(!best)return null; const sh=chordShape(best.r,best.suf,capo,tun); if(!sh)return null;
+  // solo aceptar si la forma contiene todas las notas detectadas (altura exacta) y no es absurda
+  const shapeM=new Set(sh.map(x=>tun[x.s]+x.f)); const ok=notes.every(n=>shapeM.has(n.m)||[...shapeM].some(m=>m%12===n.m%12&&Math.abs(m-n.m)===12)); if(!ok)return null;
+  const lo=Math.min(...notes.map(n=>n.m)); const out=sh.filter(x=>tun[x.s]+x.f>=lo-1).map(x=>({s:x.s,f:x.f})); out.p=shapePos(out); out.snapped=best; return out.length>=3?out:null; }
 // ===== Digitación (programación dinámica, como digitaría un guitarrista) =====
 // Candidatos por paso: para cada "posición de mano" p (dedo 1 en el traste p), cada nota va a la cuerda donde
 // quede en [p, p+3] (o al aire). Luego Viterbi minimiza: saltos de mano, estiramientos, trastes altos, cambios
@@ -506,6 +516,7 @@ function buildSteps(T){
   byStep.forEach((ns,i)=>{ if(!ns.length)return;
     if(style==="chords"&&ns[0].s!==undefined){ const out=ns.filter(n=>n.s!==undefined).map(n=>({s:n.s,f:n.f})); out.p=shapePos(out); steps[i]=out; return; }
     let uniq=[...new Map(ns.map(n=>[n.m,n])).values()].sort((a,b)=>a.m-b.m);
+    if(style==="notes"&&T.kind==="guitar"&&tun.length===6&&$(".snap",T.el).checked&&uniq.length>=3){ const snapped=snapToShape(uniq,tun,T.capo()); if(snapped){steps[i]=snapped;return;} }
     if(style==="power"||style==="root"){ const maxA=Math.max(...uniq.map(n=>n.a)); const root=uniq.find(n=>n.a>=maxA*0.35)||uniq[0];
       if(style==="root")uniq=[root]; else { let rm=root.m; while(rm-12>=tun[0])rm-=12; const cands=[];
         for(let s=0;s+1<Math.min(tun.length,4);s++){const f=rm-tun[s]; if(f>=0&&f<=F-2&&tun[s+1]-tun[s]===5)cands.push({s,f});}
@@ -701,7 +712,7 @@ $("#openProj").onchange=async e=>{ const f=e.target.files[0]; if(!f)return; try{
 (async()=>{ try{ const r=await fetch("catalogo/index.json",{cache:"no-cache"}); if(!r.ok)return; const list=await r.json(), sel=$("#catalog");
   list.forEach(it=>{const op=document.createElement("option"); op.value=it.file; op.textContent=`${it.artist?it.artist+" — ":""}${it.title}`; sel.appendChild(op);});
   sel.onchange=async()=>{ if(!sel.value)return; const rr=await fetch("catalogo/"+sel.value,{cache:"no-cache"}); loadProject(await rr.json(),"Del catálogo Bentobox"); sel.value=""; }; }catch(e){} })();
-$("#exportSel").onchange=e=>{ const v=e.target.value; e.target.value=""; if(v==="txt")exportTxt(); else if(v==="xml")exportXML(); else if(v==="mid")exportMIDI(); };
+$("#exportSel").onchange=e=>{ const v=e.target.value; e.target.value=""; if(v==="txt")exportTxt(); else if(v==="xml")exportXML(); else if(v==="gp")exportGP(); else if(v==="mid")exportMIDI(); };
 function exportTxt(){ let out=`Bentobox Guitar — ${$("#title").value||""} ${$("#artist").value?"· "+$("#artist").value:""}\n${bpm()} BPM, rejilla 1/${grid()*4}\n\n`;
   Object.values(tracks).forEach(T=>{ if(!T.steps.length)return; const tun=T.tuning(),n=tun.length,perBar=grid()*4,perLine=perBar*4; out+=`[${T.d.label} · ${$(".tuning",T.el).selectedOptions[0].text}${T.capo()?" · Capo "+T.capo():""}]\n`;
     for(let start=0;start<T.steps.length;start+=perLine){ const chords=chordsFor(T), half=grid()*2; let chLine="   "; for(let i=start;i<Math.min(start+perLine,T.steps.length);i++){chLine+=(i%half===0?(chords[i/half]||""):"").padEnd(3); if((i+1)%perBar===0)chLine+=" ";} out+=chLine+"\n";
@@ -712,7 +723,7 @@ function exportTxt(){ let out=`Bentobox Guitar — ${$("#title").value||""} ${$(
 
 // Duraciones: una nota dura hasta la siguiente nota de su cuerda o el fin del compás
 function events(T){ const pb=grid()*4, ev=[]; for(let i=0;i<T.steps.length;i++){ const st=T.steps[i]; if(!st.length)continue; const barEnd=(Math.floor(i/pb)+1)*pb; let dur=1; for(let k=i+1;k<barEnd&&k<T.steps.length;k++){ if(T.steps[k].length)break; dur++; } ev.push({i,dur,notes:st,pm:!!st.pm}); } return ev; }
-function exportXML(){
+function buildXML(){
   const div=grid(); const pb=grid()*4; const esc=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;");
   let parts="", partList="";
   Object.values(tracks).forEach((T,pi)=>{ if(!T.steps.length)return; const tun=T.tuning(), n=tun.length, id="P"+(pi+1); partList+=`<score-part id="${id}"><part-name>${T.d.label}</part-name><midi-instrument id="${id}-I1"><midi-channel>${pi+1}</midi-channel><midi-program>${T.kind==="bass"?34:30}</midi-program></midi-instrument></score-part>`;
@@ -727,7 +738,14 @@ function exportXML(){
       if(pos<(b+1)*pb)xml+=`<note><rest/><duration>${(b+1)*pb-pos}</duration></note>`; xml+=`</measure>`; }
     parts+=`<part id="${id}">${xml}</part>`; });
   const doc=`<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd"><score-partwise version="4.0"><work><work-title>${esc($("#title").value||"Bentobox Guitar")}</work-title></work><identification><creator type="composer">${esc($("#artist").value||"")}</creator><encoding><software>Bentobox Guitar</software></encoding></identification><part-list>${partList}</part-list>${parts}</score-partwise>`;
-  dl(new Blob([doc],{type:"application/vnd.recordare.musicxml+xml"}),(($("#title").value||"bentobox-tab").replace(/[^\w\-]+/g,"-").toLowerCase())+".musicxml"); }
+  return doc; }
+const fname=ext=>(($("#title").value||"bentobox-tab").replace(/[^\w\-]+/g,"-").toLowerCase())+ext;
+function exportXML(){ dl(new Blob([buildXML()],{type:"application/vnd.recordare.musicxml+xml"}),fname(".musicxml")); }
+let alphaTab=null;
+async function exportGP(){ try{ if(!alphaTab){ alphaTab=await import("https://cdn.jsdelivr.net/npm/@coderline/alphatab@1.8.4/dist/alphaTab.min.mjs"); }
+    const settings=new alphaTab.Settings(); const score=alphaTab.importer.ScoreLoader.loadScoreFromBytes(new TextEncoder().encode(buildXML()),settings);
+    const bytes=new alphaTab.exporter.Gp7Exporter().export(score,settings); dl(new Blob([bytes],{type:"application/octet-stream"}),fname(".gp")); }
+  catch(e){ console.error(e); alert("No se pudo generar el .gp (¿sin conexión?). Usa MusicXML, que Guitar Pro también abre."); } }
 function exportMIDI(){
   const PPQ=480, tick=PPQ/grid(); const vl=n=>{const b=[n&0x7f];while(n>>=7)b.unshift((n&0x7f)|0x80);return b;}; const str=s=>[...s].map(c=>c.charCodeAt(0));
   const trk=(evts)=>{ let out=[],last=0; evts.sort((a,b)=>a.t-b.t||a.d.length-b.d.length).forEach(e=>{out.push(...vl(e.t-last),...e.d);last=e.t;}); out.push(0,0xFF,0x2F,0); return [...str("MTrk"),(out.length>>>24)&255,(out.length>>>16)&255,(out.length>>>8)&255,out.length&255,...out]; };
@@ -739,6 +757,7 @@ function exportMIDI(){
   dl(new Blob([bytes],{type:"audio/midi"}),(($("#title").value||"bentobox-tab").replace(/[^\w\-]+/g,"-").toLowerCase())+".mid"); }
 function dl(blob,name){ const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; a.click(); }
 // ===== Init =====
+if("scrollRestoration" in history)history.scrollRestoration="manual"; window.scrollTo(0,0); setTimeout(()=>window.scrollTo(0,0),50);
 makeTrack("guitar"); makeTrack("bass");
 function showInst(v){ document.querySelectorAll(".inst-switch button").forEach(b=>b.classList.toggle("on",b.dataset.v===v)); tracks.guitar.el.hidden=!(v==="guitar"||v==="both"); tracks.bass.el.hidden=!(v==="bass"||v==="both"); }
 document.querySelectorAll(".inst-switch button").forEach(b=>b.onclick=()=>showInst(b.dataset.v)); showInst("guitar");

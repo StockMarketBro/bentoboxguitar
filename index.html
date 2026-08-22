@@ -55,6 +55,10 @@ button.play{background:var(--hot);border-color:var(--hot);color:#fff;min-width:1
 .pos{cursor:pointer}.pos circle{fill:transparent}.pos:hover circle{fill:rgba(255,255,255,.12)}
 .fb-info{font-size:12px;color:var(--muted);margin-top:8px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .toggle{background:#24272f}.toggle.on{background:var(--tc);color:#111;border-color:var(--tc)}
+.rec.on{background:var(--hot);border-color:var(--hot);color:#fff;animation:blink 1s infinite}
+@keyframes blink{50%{opacity:.6}}
+.meter{display:inline-block;width:90px;height:8px;background:#0e0f12;border-radius:4px;overflow:hidden;vertical-align:middle}
+.meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--ok),#ffd23f 70%,var(--hot));transition:width .05s}
 .file.small{background:#24272f;color:var(--text);border-color:var(--line)}
 .meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
 .meta input{font:500 15px Inter,sans-serif;background:transparent;color:var(--text);border:0;border-bottom:1px solid var(--line);padding:6px 2px;min-width:220px}
@@ -137,6 +141,8 @@ function makeTrack(kind){
     <div class="t-head">
       <h2>${d.label}</h2>
       <label class="file">Subir pista<input type="file" accept="audio/*"></label>
+      <button class="rec">● Grabar</button>
+      <span class="meter" hidden><i></i></span>
       <select class="tuning">${Object.entries(d.tunings).map(([k,v])=>`<option value="${k}">${v.n}</option>`).join("")}</select>
       <label class="lbl">Sensibilidad <input type="range" class="sens" min="20" max="80" value="50"></label>
       <label class="lbl">Filtro ruido <input type="range" class="noise" min="0" max="60" value="20"></label>
@@ -157,6 +163,7 @@ function makeTrack(kind){
   tracks[kind]=T;
   $(".file input",el).onchange=e=>loadFile(T,e.target.files[0]);
   $(".tuning",el).onchange=()=>{if(T.rawNotes.length)buildSteps(T);drawTab(T);drawFret(T);};
+  $(".rec",el).onclick=()=>T.rec?stopRec(T):startRec(T);
   $(".retrans",el).onclick=()=>transcribe(T);
   [$(".noise",el),$(".clean",el)].forEach(c=>c.oninput=c.onchange=()=>{ if(!T.notesRaw)return; T.rawNotes=cleanNotes(T.notesRaw,T); buildSteps(T); drawTab(T); drawFret(T);
     $(".msg",el).textContent=`${T.rawNotes.length} notas tras el filtro.`; });
@@ -186,6 +193,29 @@ async function loadFile(T,file){
   await transcribe(T);
 }
 
+// ===== Grabación =====
+async function startRec(T){
+  const msg=$(".msg",T.el), btn=$(".rec",T.el);
+  if(!navigator.mediaDevices?.getUserMedia){msg.textContent="Este navegador no permite grabar.";return;}
+  let stream; try{ stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,channelCount:1}}); }
+  catch(e){ msg.textContent="No se pudo acceder al micrófono o interfaz. Revisa los permisos del navegador."; return; }
+  if(playing)pauseAll();
+  const ac=new (window.AudioContext||window.webkitAudioContext)(), srcN=ac.createMediaStreamSource(stream), an=ac.createAnalyser(); an.fftSize=512; srcN.connect(an);
+  const meter=$(".meter",T.el), mi=$(".meter i",T.el); meter.hidden=false; const buf=new Uint8Array(an.fftSize);
+  const mime=["audio/webm;codecs=opus","audio/webm","audio/mp4",""].find(m=>!m||MediaRecorder.isTypeSupported(m));
+  const mr=new MediaRecorder(stream,mime?{mimeType:mime}:undefined), chunks=[];
+  mr.ondataavailable=e=>chunks.push(e.data);
+  const t0=Date.now(); T.rec={mr,stream,ac,timer:null,raf:null};
+  const loop=()=>{ an.getByteTimeDomainData(buf); let pk=0; for(const v of buf)pk=Math.max(pk,Math.abs(v-128)); mi.style.width=Math.min(100,pk/128*140)+"%"; T.rec.raf=requestAnimationFrame(loop); }; loop();
+  T.rec.timer=setInterval(()=>{btn.textContent=`■ Detener ${fmt((Date.now()-t0)/1000)}`;},200);
+  mr.onstop=async()=>{ clearInterval(T.rec.timer); cancelAnimationFrame(T.rec.raf); stream.getTracks().forEach(t=>t.stop()); ac.close(); meter.hidden=true; T.rec=null;
+    btn.textContent="● Grabar"; btn.classList.remove("on");
+    const ext=(mr.mimeType||"").includes("mp4")?"m4a":"webm";
+    const file=new File(chunks,`grabacion-${T.kind}-${new Date().toISOString().slice(0,19).replace(/[:T]/g,"-")}.${ext}`,{type:mr.mimeType});
+    await loadFile(T,file); };
+  mr.start(); btn.classList.add("on"); btn.textContent="■ Detener 0:00"; msg.textContent="Grabando… toca tu parte y pulsa Detener. Usa una interfaz de audio o el micrófono cerca del amplificador.";
+}
+function stopRec(T){ T.rec?.mr.stop(); }
 async function transcribe(T){
   if(!model||!T.buffer)return;
   const msg=$(".msg",T.el), prog=$(".prog",T.el), bar=$(".prog i",T.el);

@@ -214,6 +214,7 @@ function makeTrack(kind){
     <h3>${d.label}</h3>
     <label class="file btn-red">⬆ Subir pista<input type="file" accept="audio/*"></label>
     <button class="rec">● Grabar</button><span class="meter" hidden><i></i></span>
+    <label class="file btn-ghost" style="border:1px solid var(--line2);border-radius:8px;padding:8px 12px;font-size:13px" title="Notas transcritas por otro modelo (YourMT3+, MuScriptor, Melodyne…) o un MIDI cualquiera">⬇ Importar MIDI<input type="file" class="midifile" accept=".mid,.midi,audio/midi"></label>
     <span class="fname hint"></span>
     <span style="margin-left:auto" class="row">
       <button class="toggle mute">Silencio</button><button class="toggle solo">Solo</button>
@@ -242,7 +243,7 @@ function makeTrack(kind){
             <label class="lbl">Sensibilidad <input type="range" class="sens" min="20" max="80" value="50"></label>
             <label class="lbl">Filtro ruido <input type="range" class="noise" min="0" max="60" value="20"></label>
             <label class="lbl"><input type="checkbox" class="clean" checked> Limpieza de armónicos</label>
-            <label class="lbl"><input type="checkbox" class="snap" checked> Encajar en formas de acorde</label>
+            <label class="lbl">Acordes <select class="snapmode"><option value="faithful">fiel: solo lo que suena (arpegios)</option><option value="fill">completar rasgueos (2+ notas → acorde)</option><option value="off">sin ajuste de formas</option></select></label><input type="checkbox" class="snap" checked hidden>
           </div>
         </details>
       </div>
@@ -277,11 +278,16 @@ function makeTrack(kind){
   const re=()=>{ if(!T.buffer)return; if(effStyle(T)!=="notes"||!T.notesRaw){T.rawNotes=[];transcribe(T);} else {T.rawNotes=cleanNotes(T.notesRaw,T);buildSteps(T);drawTab(T);drawFret(T);} };
   $(".file input",el).onchange=e=>loadFile(T,e.target.files[0]);
   $(".rec",el).onclick=()=>T.rec?stopRec(T):startRec(T);
+  $(".midifile",el).onchange=async e=>{ const f=e.target.files[0]; e.target.value=""; if(!f)return; try{ const notes=parseMIDI(new Uint8Array(await f.arrayBuffer()));
+      if(!notes.length){$(".msg",el).textContent="El MIDI no contiene notas.";return;}
+      if(playing)pauseAll(); T.notesRaw=notes; T.rawNotes=cleanNotes(notes,T); T.autoStyle=null; $(".style",el).value="notes"; if(!T.buffer&&!$("#bpm").dataset.user&&notes.bpm)$("#bpm").value=notes.bpm;
+      if(!T.buffer){ T.buffer=null; } finish(T); $(".msg",el).textContent=`${T.rawNotes.length} notas importadas de ${f.name}${notes.bpm?" · "+notes.bpm+" BPM del archivo":""}. ${T.audio?"Sincronizadas con la pista cargada.":"Sube la pista para oír el original; sin ella suena sintetizado."}`; }
+    catch(err){ console.error(err); $(".msg",el).textContent="No pude leer ese MIDI."; } };
   $(".style",el).onchange=()=>{ T.autoStyle=null; $(".styleChip",el).hidden=true; if($(".style",el).value==="lead"&&grid()<4&&!$("#grid").dataset.user)$("#grid").value=4; re(); };
   $(".tuning",el).onchange=re;
   if(kind==="guitar"){ $(".capo",el).onchange=()=>{$(".capoSug",el).hidden=true;re();}; $(".capoSug",el).onclick=()=>{$(".capo",el).value=$(".capoSug",el).dataset.c;$(".capo",el).onchange();}; }
   $(".retrans",el).onclick=()=>{T.autoStyle=null;T.rawNotes=[];transcribe(T);};
-  [$(".noise",el),$(".clean",el),$(".snap",el)].forEach(c=>c.oninput=c.onchange=()=>{ if(effStyle(T)!=="notes"){T.rawNotes=[];transcribe(T);return;} if(!T.notesRaw)return; T.rawNotes=cleanNotes(T.notesRaw,T);buildSteps(T);drawTab(T);drawFret(T); $(".msg",el).textContent=`${T.rawNotes.length} notas tras el filtro.`; });
+  [$(".noise",el),$(".clean",el),$(".snap",el),$(".snapmode",el)].forEach(c=>c.oninput=c.onchange=()=>{ if(effStyle(T)!=="notes"){T.rawNotes=[];transcribe(T);return;} if(!T.notesRaw)return; T.rawNotes=cleanNotes(T.notesRaw,T);buildSteps(T);drawTab(T);drawFret(T); $(".msg",el).textContent=`${T.rawNotes.length} notas tras el filtro.`; });
   $(".mute",el).onclick=e=>{T.muted=!T.muted;e.target.classList.toggle("on",T.muted);el.classList.toggle("muted",T.muted);applyMix();};
   $(".solo",el).onclick=e=>{T.solo=!T.solo;e.target.classList.toggle("on",T.solo);applyMix();};
   $(".vol",el).oninput=applyMix;
@@ -335,6 +341,20 @@ async function startRec(T){
 }
 function stopRec(T){ T.rec?.mr.stop(); }
 
+// ===== Importar MIDI (salida de otros modelos) =====
+function parseMIDI(b){ let p=0; const u32=()=>(b[p++]<<24|b[p++]<<16|b[p++]<<8|b[p++])>>>0, u16=()=>(b[p++]<<8|b[p++]), vl=()=>{let v=0,c;do{c=b[p++];v=(v<<7)|(c&0x7f);}while(c&0x80);return v;};
+  if(String.fromCharCode(...b.slice(0,4))!=="MThd")throw new Error("no MIDI"); p=8; const fmt=u16(), ntr=u16(), div=u16(); if(div&0x8000)throw new Error("SMPTE no soportado");
+  const tempos=[{tick:0,us:500000}]; const notes=[]; let firstTempo=null;
+  for(let t=0;t<ntr;t++){ if(String.fromCharCode(...b.slice(p,p+4))!=="MTrk")break; p+=4; const len=u32(), end=p+len; let tick=0, run=0; const open={};
+    while(p<end){ tick+=vl(); let st=b[p]; if(st<0x80){st=run;} else {p++; run=st;}
+      if(st===0xFF){ const type=b[p++], l=vl(); if(type===0x51){ const us=(b[p]<<16|b[p+1]<<8|b[p+2]); tempos.push({tick,us}); if(firstTempo===null)firstTempo=us; } p+=l; }
+      else if(st===0xF0||st===0xF7){ const l=vl(); p+=l; }
+      else { const hi=st&0xF0, ch=st&0x0F; if(hi===0xC0||hi===0xD0){p++;} else { const d1=b[p++], d2=b[p++]; if(ch===9)continue; // percusión
+          if(hi===0x90&&d2>0){ open[d1]={tick,vel:d2}; } else if(hi===0x80||(hi===0x90&&d2===0)){ const o=open[d1]; if(o){ notes.push({m:d1,t0:o.tick,t1:tick,vel:o.vel}); delete open[d1]; } } } } }
+    p=end; }
+  tempos.sort((a,b)=>a.tick-b.tick); const toSec=(tk)=>{ let sec=0,last=0,us=500000; for(const tp of tempos){ if(tp.tick>tk)break; sec+=(tp.tick-last)/div*us/1e6; last=tp.tick; us=tp.us; } return sec+(tk-last)/div*us/1e6; };
+  const out=notes.map(n=>({m:n.m,t:toSec(n.t0),d:Math.max(0.05,toSec(n.t1)-toSec(n.t0)),a:n.vel/127})).sort((a,b)=>a.t-b.t);
+  out.bpm=firstTempo?Math.round(60e6/firstTempo):null; return out; }
 // ===== FFT y detectores =====
 function fft(re,im){ const n=re.length; for(let i=1,j=0;i<n;i++){let bit=n>>1;for(;j&bit;bit>>=1)j^=bit;j^=bit;if(i<j){[re[i],re[j]]=[re[j],re[i]];[im[i],im[j]]=[im[j],im[i]];}}
   for(let len=2;len<=n;len<<=1){const ang=-2*Math.PI/len,wr=Math.cos(ang),wi=Math.sin(ang);
@@ -514,15 +534,18 @@ function buildSteps(T){
   const seq=[]; // {i, cands}
   let hand=3;
   // contexto armónico (estilo IA + guitarra): acorde por medio compás a partir de todas las notas detectadas en él
-  const ctx=[]; const half=grid()*2, useCtx=style==="notes"&&T.kind==="guitar"&&tun.length===6&&$(".snap",T.el).checked;
+  const ctx=[]; const half=grid()*2, snapMode=$(".snapmode",T.el).value, useCtx=style==="notes"&&T.kind==="guitar"&&tun.length===6&&snapMode!=="off";
   if(useCtx){ for(let k=0;k<nSteps;k+=half){ const pcw=new Array(12).fill(0); let cnt=0; for(let j=k;j<k+half&&j<nSteps;j++)byStep[j].forEach(n=>{pcw[((n.m%12)+12)%12]+=n.a||1;cnt++;});
       let best=null; if(cnt>=2){ const present=pcw.filter(x=>x>0).length; for(let r=0;r<12;r++)for(const [suf,iv] of [["",[0,4,7]],["m",[0,3,7]]]){ const set=iv.map(x=>(r+x)%12); let sc=0; set.forEach(pc=>sc+=pcw[pc]>0?pcw[pc]:-0.8); pcw.forEach((w,pc)=>{if(!set.includes(pc))sc-=w*0.9;}); if(pcw[r]===0)sc-=0.5; if(!best||sc>best.sc)best={sc,r,suf}; }
-        if(best&&best.sc<1.2)best=null; }
+        if(best){ const set=[0,4,7].map(x=>0); const iv=best.suf==="m"?[0,3,7]:[0,4,7]; const inC=iv.map(x=>(best.r+x)%12).filter(pc=>pcw[pc]>0).length; const total=pcw.reduce((a,b)=>a+b,0), inW=iv.map(x=>(best.r+x)%12).reduce((a,pc)=>a+pcw[pc],0); if(inC<2||inW<total*0.75)best=null; } }
       const sh=best?chordShape(best.r,best.suf,T.capo(),tun):null; for(let j=k;j<k+half;j++)ctx[j]=sh; } }
   byStep.forEach((ns,i)=>{ if(!ns.length)return;
     if(useCtx&&ctx[i]){ const sh=ctx[i]; const byM=new Map(sh.map(x=>[tun[x.s]+x.f,x])); const inChord=ns.filter(n=>byM.has(n.m)||[...byM.keys()].some(m=>m%12===n.m%12));
-      if(inChord.length>=2&&inChord.length>=ns.length-1){ const lo=Math.min(...inChord.map(n=>n.m)); const out=sh.filter(x=>tun[x.s]+x.f>=lo-1).map(x=>({s:x.s,f:x.f})); if(out.length>=3){out.p=shapePos(out);steps[i]=out;return;} }
-      if(inChord.length===ns.length&&ns.length===1){ const n=ns[0]; let x=byM.get(n.m); if(!x){ const cand=[...byM.entries()].filter(([m])=>m%12===n.m%12); if(cand.length)x=cand[0][1]; } if(x){ const out=[{s:x.s,f:x.f}]; out.p=shapePos(sh); steps[i]=out; return; } } }
+      const place=n=>{ let x=byM.get(n.m); if(!x){ const cand=[...byM.entries()].filter(([m])=>m%12===n.m%12&&Math.abs(m-n.m)===12); if(cand.length)x=cand[0][1]; } return x; };
+      if(snapMode==="fill"&&inChord.length>=2&&inChord.length>=ns.length-1){ const lo=Math.min(...inChord.map(n=>n.m)); const out=sh.filter(x=>tun[x.s]+x.f>=lo-1).map(x=>({s:x.s,f:x.f})); if(out.length>=3){out.p=shapePos(out);steps[i]=out;return;} }
+      if(inChord.length===ns.length){ // fiel: cada nota detectada en su sitio dentro de la forma del acorde (arpegio, bajo, golpe parcial)
+        const out=[]; const used=new Set(); ns.forEach(n=>{ const x=place(n); if(x&&!used.has(x.s)){used.add(x.s);out.push({s:x.s,f:x.f});} });
+        if(out.length===ns.length){ out.p=shapePos(sh); steps[i]=out; return; } } }
     if(style==="chords"&&ns[0].s!==undefined){ const out=ns.filter(n=>n.s!==undefined).map(n=>({s:n.s,f:n.f})); out.p=shapePos(out); steps[i]=out; return; }
     let uniq=[...new Map(ns.map(n=>[n.m,n])).values()].sort((a,b)=>a.m-b.m);
     if(style==="notes"&&T.kind==="guitar"&&tun.length===6&&$(".snap",T.el).checked&&uniq.length>=3){ const snapped=snapToShape(uniq,tun,T.capo()); if(snapped){steps[i]=snapped;return;} }

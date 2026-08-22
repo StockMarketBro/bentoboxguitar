@@ -430,7 +430,7 @@ async function transcribe(T){
   const notes=noteFramesToTime(addPitchBendsToNoteEvents(contours,outputToNotesPoly(frames,onsets,onsetT,frameT,T.kind==="bass"?6:4,true,T.d.maxFreq,T.d.minFreq,true,11)));
   T.notesRaw=notes.map(n=>({m:n.pitchMidi,t:n.startTimeSeconds+a0,d:n.durationSeconds,a:n.amplitude}));
   const fresh=cleanNotes(T.notesRaw,T); T.rawNotes=[...T.rawNotes.filter(n=>n.t<a0||n.t>=a1),...fresh]; prog.hidden=true;
-  if(!$("#bpm").dataset.user)estimateBpm(T); finish(T);
+  if(!$("#bpm").dataset.user){ const b=bpmFromAudio(T); if(b)$("#bpm").value=b; else estimateBpm(T); } finish(T);
   msg.textContent=`${fresh.length} notas en ${Math.round(a0)}–${Math.round(a1)} s (${Math.round((performance.now()-tStart)/1000)} s). Ajusta BPM/rejilla si no cuadra.`;
 }
 function finish(T){ buildSteps(T); T.cursor=0; drawTab(T); drawFret(T); drawDiagram(T); drawSections(T); updateTech(T); suggestCapo(T); enableTransport(); }
@@ -513,7 +513,16 @@ function buildSteps(T){
   // power chords: forma fija raíz-quinta-octava en cuerdas graves, elegida por continuidad
   const seq=[]; // {i, cands}
   let hand=3;
+  // contexto armónico (estilo IA + guitarra): acorde por medio compás a partir de todas las notas detectadas en él
+  const ctx=[]; const half=grid()*2, useCtx=style==="notes"&&T.kind==="guitar"&&tun.length===6&&$(".snap",T.el).checked;
+  if(useCtx){ for(let k=0;k<nSteps;k+=half){ const pcw=new Array(12).fill(0); let cnt=0; for(let j=k;j<k+half&&j<nSteps;j++)byStep[j].forEach(n=>{pcw[((n.m%12)+12)%12]+=n.a||1;cnt++;});
+      let best=null; if(cnt>=2){ const present=pcw.filter(x=>x>0).length; for(let r=0;r<12;r++)for(const [suf,iv] of [["",[0,4,7]],["m",[0,3,7]]]){ const set=iv.map(x=>(r+x)%12); let sc=0; set.forEach(pc=>sc+=pcw[pc]>0?pcw[pc]:-0.8); pcw.forEach((w,pc)=>{if(!set.includes(pc))sc-=w*0.9;}); if(pcw[r]===0)sc-=0.5; if(!best||sc>best.sc)best={sc,r,suf}; }
+        if(best&&best.sc<1.2)best=null; }
+      const sh=best?chordShape(best.r,best.suf,T.capo(),tun):null; for(let j=k;j<k+half;j++)ctx[j]=sh; } }
   byStep.forEach((ns,i)=>{ if(!ns.length)return;
+    if(useCtx&&ctx[i]){ const sh=ctx[i]; const byM=new Map(sh.map(x=>[tun[x.s]+x.f,x])); const inChord=ns.filter(n=>byM.has(n.m)||[...byM.keys()].some(m=>m%12===n.m%12));
+      if(inChord.length>=2&&inChord.length>=ns.length-1){ const lo=Math.min(...inChord.map(n=>n.m)); const out=sh.filter(x=>tun[x.s]+x.f>=lo-1).map(x=>({s:x.s,f:x.f})); if(out.length>=3){out.p=shapePos(out);steps[i]=out;return;} }
+      if(inChord.length===ns.length&&ns.length===1){ const n=ns[0]; let x=byM.get(n.m); if(!x){ const cand=[...byM.entries()].filter(([m])=>m%12===n.m%12); if(cand.length)x=cand[0][1]; } if(x){ const out=[{s:x.s,f:x.f}]; out.p=shapePos(sh); steps[i]=out; return; } } }
     if(style==="chords"&&ns[0].s!==undefined){ const out=ns.filter(n=>n.s!==undefined).map(n=>({s:n.s,f:n.f})); out.p=shapePos(out); steps[i]=out; return; }
     let uniq=[...new Map(ns.map(n=>[n.m,n])).values()].sort((a,b)=>a.m-b.m);
     if(style==="notes"&&T.kind==="guitar"&&tun.length===6&&$(".snap",T.el).checked&&uniq.length>=3){ const snapped=snapToShape(uniq,tun,T.capo()); if(snapped){steps[i]=snapped;return;} }

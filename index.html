@@ -33,12 +33,13 @@ button.play{background:var(--hot);border-color:var(--hot);color:#fff;min-width:1
 .t-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
 .t-head h2{font-family:Syne,sans-serif;font-size:15px;letter-spacing:.12em;text-transform:uppercase;margin:0 10px 0 0}
 .t-head h2::before{content:"";display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--tc);margin-right:8px}
-.file{position:relative;overflow:hidden}
+.file{position:relative;overflow:hidden;display:inline-block;font:500 13px Inter,sans-serif;background:var(--tc);color:#111;border:1px solid var(--tc);border-radius:8px;padding:8px 13px;cursor:pointer}
 .file input{position:absolute;inset:0;opacity:0;cursor:pointer}
 .status{font-size:12px;color:var(--muted);flex-basis:100%;display:flex;align-items:center;gap:10px;min-height:18px}
 .prog{flex:1;max-width:320px;height:6px;background:#0e0f12;border-radius:3px;overflow:hidden}
 .prog i{display:block;height:100%;width:0;background:var(--tc);transition:width .2s}
-.tab{background:var(--paper);border-radius:10px;padding:12px 10px 8px;position:relative}
+.tab{background:var(--paper);border-radius:10px;padding:12px 10px 8px;position:relative;min-height:90px}
+.tab canvas.blank{display:none}
 .tab canvas{display:block;width:100%;height:auto}
 .tab .empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--ink-soft);font-size:14px;text-align:center;padding:20px}
 .fb{margin-top:12px}
@@ -105,7 +106,6 @@ const rate=()=>$("#rate").value/100;
   await model.model;
   $("#modelStatus").textContent="Modelo listo · sube tus pistas";
   $("#modelStatus").style.color="var(--ok)";
-  document.querySelectorAll(".file input").forEach(i=>i.disabled=false);
 }catch(e){console.error(e);$("#modelStatus").textContent="No se pudo cargar el modelo (revisa tu conexión)";$("#modelStatus").style.color="var(--hot)";}})();
 
 // ===== Track =====
@@ -115,7 +115,7 @@ function makeTrack(kind){
   el.innerHTML=`
     <div class="t-head">
       <h2>${d.label}</h2>
-      <button class="file">Subir pista<input type="file" accept="audio/*" disabled></button>
+      <label class="file">Subir pista<input type="file" accept="audio/*"></label>
       <select class="tuning">${Object.entries(d.tunings).map(([k,v])=>`<option value="${k}">${v.n}</option>`).join("")}</select>
       <label class="lbl">Sensibilidad <input type="range" class="sens" min="20" max="80" value="50"></label>
       <button class="retrans" disabled>Re-transcribir</button>
@@ -145,7 +145,7 @@ function makeTrack(kind){
 
 async function loadFile(T,file){
   if(!file)return;
-  const msg=$(".msg",T.el); msg.textContent=`Decodificando ${file.name}…`;
+  const msg=$(".msg",T.el); if(!model){msg.textContent="El modelo aún se está cargando, espera unos segundos e inténtalo de nuevo.";return;} msg.textContent=`Decodificando ${file.name}…`;
   const ac=new (window.AudioContext||window.webkitAudioContext)();
   const buf=await ac.decodeAudioData(await file.arrayBuffer());
   T.buffer=buf;
@@ -221,7 +221,7 @@ function drawTab(T){
   const n=T.tuning().length;
   const W=1180, H=n*ROWH+40; cv.width=W; cv.height=H;
   const g=cv.getContext("2d"); g.clearRect(0,0,W,H);
-  if(!T.steps.length){empty.hidden=false;return;} empty.hidden=true;
+  if(!T.steps.length){empty.hidden=false;cv.classList.add("blank");return;} empty.hidden=true;cv.classList.remove("blank");
   const cols=Math.floor((W-40)/COLW);
   if(T.cursor<T.view||T.cursor>=T.view+cols-2)T.view=Math.max(0,T.cursor-Math.floor(cols/3));
   const tun=T.tuning(), perBar=grid()*4;
@@ -245,7 +245,7 @@ function drawTab(T){
 function drawFret(T){
   const svg=$(".fb svg",T.el), tun=T.tuning(), n=tun.length, F=T.d.frets;
   const X0=70,W=1000,Y0=30,H=n===4?110:140, gap=H/(n-1);
-  const xs=[0]; let p=0; const tot=F*(F+1)/2; for(let i=1;i<=F;i++){p+=(F+1-i)*(W/tot);xs.push(p);}
+  const L=W/(1-Math.pow(2,-F/12)); const xs=[]; for(let i=0;i<=F;i++)xs.push(L*(1-Math.pow(2,-i/12)));
   const fx=f=>X0+xs[f], cx=f=>f===0?X0-2:(fx(f)+fx(f-1))/2;
   let s=`<defs><linearGradient id="wood${T.kind}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#45291a"/><stop offset="1" stop-color="#2a1a10"/></linearGradient></defs>
     <rect x="${X0}" y="${Y0-14}" width="${W}" height="${H+28}" rx="6" fill="url(#wood${T.kind})"/><rect x="${X0-6}" y="${Y0-14}" width="8" height="${H+28}" fill="#e9e2cf"/>`;
